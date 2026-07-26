@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from pydantic import (
     BaseModel,
@@ -335,64 +336,117 @@ class BucketConfig(BaseModel):
 
 class ExpectedTimelineConfig(BaseModel):
     """
-    Define optional expected boundaries for timeline analysis.
+    Define how timestamp-integrity analysis builds its expected timeline.
 
-    The supplied boundaries help the EDA stage identify whether
-    timestamps are missing:
+    Exactly one timeline mode is selected:
 
-    - before the first available observation;
-    - after the final available observation;
-    - within the available dataset.
+    - ``date_range`` uses explicit ``expected_start`` and ``expected_end``;
+    - ``num_days`` counts complete days from the earliest valid timestamp
+      found in each prepared KPI dataset; or
+    - ``global_min_max`` uses the earliest and latest valid timestamps found
+      in each prepared KPI dataset.
 
-    Either boundary may be supplied independently.
+    ``global_min_max`` is the default so callers may omit timeline settings
+    when they want the dataset itself to define the analysis boundaries.
     """
 
     model_config = ConfigDict(
         extra="forbid",
     )
 
+    timeline_mode: Literal[
+        "date_range",
+        "num_days",
+        "global_min_max",
+    ] = Field(
+        default="global_min_max",
+        description=(
+            "Method used to construct the expected timestamp timeline."
+        ),
+    )
+
     expected_start: datetime | None = Field(
         default=None,
         description=(
-            "Optional expected first timestamp of the input dataset."
+            "First expected timestamp when timeline_mode is date_range."
         ),
     )
 
     expected_end: datetime | None = Field(
         default=None,
         description=(
-            "Optional expected final timestamp of the input dataset."
+            "Final expected timestamp when timeline_mode is date_range."
+        ),
+    )
+
+    num_days: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Positive number of complete days when timeline_mode is "
+            "num_days."
         ),
     )
 
     @model_validator(mode="after")
-    def validate_expected_timeline_order(
+    def validate_timeline_mode(
         self,
     ) -> ExpectedTimelineConfig:
         """
-        Validate the order of the expected timeline boundaries.
+        Validate fields required and forbidden by the selected mode.
 
         Args:
             None.
 
         Returns:
             ExpectedTimelineConfig:
-                The validated expected-timeline configuration.
+                The validated timeline configuration.
 
         Raises:
             ValueError:
-                If both boundaries are provided and expected_end is
-                earlier than or equal to expected_start.
+                If required values are missing, unrelated values are
+                supplied, or the explicit date range is invalid.
         """
 
-        if (
-            self.expected_start is not None
-            and self.expected_end is not None
-            and self.expected_end <= self.expected_start
-        ):
-            raise ValueError(
-                "expected_end must be later than expected_start."
-            )
+        has_start = self.expected_start is not None
+        has_end = self.expected_end is not None
+        has_num_days = self.num_days is not None
+
+        if self.timeline_mode == "date_range":
+            if not (has_start and has_end):
+                raise ValueError(
+                    "date_range mode requires expected_start and "
+                    "expected_end."
+                )
+
+            if has_num_days:
+                raise ValueError(
+                    "num_days cannot be supplied in date_range mode."
+                )
+
+            if self.expected_end <= self.expected_start:
+                raise ValueError(
+                    "expected_end must be later than expected_start."
+                )
+
+        elif self.timeline_mode == "num_days":
+            if not has_num_days:
+                raise ValueError(
+                    "num_days mode requires a positive num_days value."
+                )
+
+            if has_start or has_end:
+                raise ValueError(
+                    "expected_start and expected_end cannot be supplied "
+                    "in num_days mode."
+                )
+
+        else:
+            if has_start or has_end or has_num_days:
+                raise ValueError(
+                    "global_min_max mode does not accept expected_start, "
+                    "expected_end, or num_days."
+                )
 
         return self
 
@@ -407,7 +461,7 @@ class DatasetInputConfig(BaseModel):
     - physical column mappings;
     - optional request-level bucket information;
     - optional single-KPI declaration;
-    - optional expected timeline boundaries.
+    - expected timeline selection for integrity analysis.
 
     The CSV contents are validated separately after the file is loaded.
 
@@ -450,11 +504,11 @@ class DatasetInputConfig(BaseModel):
         ),
     )
 
-    expected_timeline: ExpectedTimelineConfig | None = Field(
-        default=None,
+    expected_timeline: ExpectedTimelineConfig = Field(
+        default_factory=ExpectedTimelineConfig,
         description=(
-            "Optional expected timeline boundaries used during data "
-            "integrity analysis."
+            "Timeline method used during timestamp-integrity analysis. "
+            "Defaults to global_min_max."
         ),
     )
 

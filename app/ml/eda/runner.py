@@ -187,95 +187,74 @@ def convert_bucket_to_frequency(
 
 def resolve_integrity_timeline_inputs(
     config: DatasetInputConfig,
-    num_days: int | None,
 ) -> tuple[
     pd.Timestamp | None,
     pd.Timestamp | None,
     int | None,
+    bool,
 ]:
     """
-    Resolve the timeline method passed to data-integrity analysis.
+    Resolve schema timeline settings for data-integrity analysis.
 
-    Exactly one method is required:
-
-    - both ``expected_start`` and ``expected_end`` from the request; or
-    - a positive ``num_days`` value supplied to this runner.
+    The request schema has already validated the selected mode and its
+    associated values. This function only translates that validated schema
+    into the keyword arguments expected by ``analyse_data_integrity``.
 
     Args:
         config:
-            Validated dataset input configuration.
-
-        num_days:
-            Optional number of complete days counted from the earliest
-            valid timestamp in each prepared KPI file.
+            Validated dataset input configuration containing one of the
+            ``date_range``, ``num_days``, or ``global_min_max`` modes.
 
     Returns:
-        tuple[pd.Timestamp | None, pd.Timestamp | None, int | None]:
-            Explicit start, explicit end, and number of days to pass to
-            timestamp-integrity analysis.
+        tuple[pd.Timestamp | None, pd.Timestamp | None, int | None, bool]:
+            Explicit start, explicit end, number of days, and whether the
+            timeline must use the KPI dataset's global minimum and maximum.
 
     Raises:
         InputValidationError:
-            If neither method, both methods, an incomplete date range,
-            or a non-positive number of days is supplied.
+            If an unsupported timeline mode reaches the runner. This should
+            not occur after successful Pydantic schema validation.
     """
 
-    expected_start = None
-    expected_end = None
+    timeline_config = config.expected_timeline
+    timeline_mode = timeline_config.timeline_mode
 
-    if config.expected_timeline is not None:
-        expected_start = (
-            config.expected_timeline.expected_start
-        )
-        expected_end = (
-            config.expected_timeline.expected_end
-        )
-
-    has_start = expected_start is not None
-    has_end = expected_end is not None
-
-    if has_start != has_end:
-        raise InputValidationError(
-            "expected_start and expected_end must be supplied together.",
-            error_code="INCOMPLETE_EXPECTED_TIMELINE",
-            details={
-                "expected_start_supplied": has_start,
-                "expected_end_supplied": has_end,
-            },
+    if timeline_mode == "date_range":
+        return (
+            pd.Timestamp(
+                timeline_config.expected_start
+            ),
+            pd.Timestamp(
+                timeline_config.expected_end
+            ),
+            None,
+            False,
         )
 
-    has_explicit_range = has_start and has_end
-    has_num_days = num_days is not None
-
-    if has_explicit_range == has_num_days:
-        raise InputValidationError(
-            "Provide exactly one data-integrity timeline method: either "
-            "expected_start with expected_end, or num_days.",
-            error_code="INVALID_DATA_INTEGRITY_TIMELINE_METHOD",
-            details={
-                "explicit_range_supplied": has_explicit_range,
-                "num_days_supplied": has_num_days,
-            },
+    if timeline_mode == "num_days":
+        return (
+            None,
+            None,
+            timeline_config.num_days,
+            False,
         )
 
-    if num_days is not None and num_days <= 0:
-        raise InputValidationError(
-            "num_days must be greater than zero.",
-            error_code="INVALID_DATA_INTEGRITY_NUM_DAYS",
-            details={
-                "num_days": num_days,
-            },
+    if timeline_mode == "global_min_max":
+        return (
+            None,
+            None,
+            None,
+            True,
         )
 
-    return (
-        pd.Timestamp(expected_start)
-        if expected_start is not None
-        else None,
-        pd.Timestamp(expected_end)
-        if expected_end is not None
-        else None,
-        num_days,
+    raise InputValidationError(
+        "The data-integrity timeline mode is unsupported.",
+        error_code="UNSUPPORTED_DATA_INTEGRITY_TIMELINE_MODE",
+        details={
+            "timeline_mode": timeline_mode,
+        },
     )
+
 
 
 def build_kpi_summary_directory(
@@ -314,8 +293,6 @@ def build_kpi_summary_directory(
 def run_eda_pipeline(
     config: DatasetInputConfig,
     logger: Logger,
-    *,
-    num_days: int | None = None,
 ) -> EDARunnerResult:
     """
     Run dataset preparation and Part A EDA for every resolved KPI.
@@ -324,17 +301,17 @@ def run_eda_pipeline(
     allowed to propagate to the higher workflow layer, which can update the
     run manifest and mark the complete run as failed.
 
+    Timeline selection is read entirely from
+    ``config.expected_timeline``. The runner therefore has one validated
+    source of truth for ``date_range``, ``num_days``, and
+    ``global_min_max`` modes.
+
     Args:
         config:
             Validated dataset input configuration for the source CSV.
 
         logger:
             Run-specific logger used by all called stages.
-
-        num_days:
-            Optional number of expected complete days. Supply this only
-            when explicit expected timeline boundaries are absent from
-            ``config``.
 
     Returns:
         EDARunnerResult:
@@ -343,7 +320,7 @@ def run_eda_pipeline(
 
     Raises:
         InputValidationError:
-            If timeline selection or any called validation stage fails.
+            If timeline conversion or any called validation stage fails.
 
         FileProcessingError:
             If input, preparation, or report files cannot be processed.
@@ -367,9 +344,9 @@ def run_eda_pipeline(
         expected_start,
         expected_end,
         resolved_num_days,
+        use_global_min_max,
     ) = resolve_integrity_timeline_inputs(
         config=config,
-        num_days=num_days,
     )
 
     kpi_results: list[KPIEDARunResult] = []
@@ -421,6 +398,7 @@ def run_eda_pipeline(
             expected_start=expected_start,
             expected_end=expected_end,
             num_days=resolved_num_days,
+            use_global_min_max=use_global_min_max,
         )
 
         kpi_result = KPIEDARunResult(
