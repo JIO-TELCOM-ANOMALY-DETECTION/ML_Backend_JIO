@@ -168,8 +168,8 @@ class DataIntegrityResult:
 
 def validate_data_integrity_inputs(
     dataframe: pd.DataFrame,
-    site_summary: pd.DataFrame, # this is the file that has the unique id list and count of rows
-    columns: DatasetColumnMapping, # this is a imported class form dataset.py in app.core.common it has all the column name mapping to their generic names;
+    site_summary: pd.DataFrame,
+    columns: DatasetColumnMapping,
 ) -> None:
     """
     Validate source and site-summary dataframes before analysis.
