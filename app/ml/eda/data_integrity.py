@@ -4,11 +4,13 @@ Analyse timestamp integrity for one KPI dataset.
 This module reads the unique-site summary produced by ``site_analysis.py``
 and audits timestamp completeness for every listed site.
 
-The expected timeline must be supplied using exactly one of these methods:
+The expected timeline is supplied using exactly one of these methods:
 
-1. ``expected_start`` and ``expected_end``; or
+1. ``expected_start`` and ``expected_end``;
 2. ``num_days``, counted from the earliest valid timestamp present in the
-   KPI dataframe after filtering to the listed sites.
+   KPI dataframe after filtering to the listed sites; or
+3. ``global_min_max``, using the earliest and latest valid timestamps in
+   that prepared KPI dataframe after filtering to the listed sites.
 
 The module is read-only with respect to the source dataset. It does not insert
 missing rows, fill values, remove duplicates, or modify KPI observations.
@@ -79,7 +81,7 @@ class ExpectedTimeline:
 
     Attributes:
         method:
-            Timeline-selection method: ``date_range`` or ``num_days``.
+            Timeline-selection method: ``date_range``, ``num_days``, or ``global_min_max``.
 
         start:
             First expected timestamp.
@@ -349,14 +351,15 @@ def resolve_expected_timeline(
     expected_start: datetime | str | pd.Timestamp | None = None,
     expected_end: datetime | str | pd.Timestamp | None = None,
     num_days: int | None = None,
+    use_global_min_max: bool = False,
 ) -> ExpectedTimeline:
     """
     Resolve the complete expected timeline using exactly one input method.
 
-    When ``num_days`` is used, the timeline starts at the earliest valid
-    timestamp present in the filtered KPI dataset. The generated timeline
-    contains exactly ``num_days`` complete 24-hour periods. For 15-minute
-    data, ``num_days=90`` therefore creates ``90 * 96 = 8640`` timestamps.
+    ``date_range`` uses explicit inclusive boundaries. ``num_days`` starts
+    from the earliest valid timestamp and creates the requested number of
+    complete 24-hour periods. ``global_min_max`` starts at the earliest valid
+    timestamp and uses the latest valid timestamp as the analysis boundary.
 
     Args:
         valid_timestamps:
@@ -375,20 +378,33 @@ def resolve_expected_timeline(
             Optional positive number of complete days counted from the
             earliest valid source timestamp.
 
+        use_global_min_max:
+            Whether to derive boundaries from the earliest and latest valid
+            timestamps in the prepared KPI dataframe.
+
     Returns:
         ExpectedTimeline:
             Resolved timeline metadata and DatetimeIndex.
 
     Raises:
         InputValidationError:
-            If neither or both methods are supplied, boundaries are invalid,
-            ``num_days`` is invalid, or the frequency cannot represent a
-            complete day exactly.
+            If the timeline selection is contradictory, boundaries are
+            invalid, no usable timestamps exist, ``num_days`` is invalid, or
+            the frequency cannot represent a complete day exactly.
     """
 
     frequency = normalise_expected_frequency(
         expected_frequency
     )
+
+    if not isinstance(use_global_min_max, bool):
+        raise InputValidationError(
+            "use_global_min_max must be a boolean value.",
+            error_code="INVALID_GLOBAL_MIN_MAX_FLAG",
+            details={
+                "use_global_min_max": use_global_min_max,
+            },
+        )
 
     has_start = expected_start is not None
     has_end = expected_end is not None
@@ -401,19 +417,28 @@ def resolve_expected_timeline(
             error_code="INCOMPLETE_EXPECTED_DATE_RANGE",
         )
 
-    if has_date_range == has_num_days:
+    selected_method_count = sum(
+        (
+            bool(has_start and has_end),
+            bool(has_num_days),
+            use_global_min_max,
+        )
+    )
+
+    if selected_method_count != 1:
         raise InputValidationError(
             "Provide exactly one timeline method: expected_start with "
-            "expected_end, or num_days.",
+            "expected_end, num_days, or global_min_max.",
             error_code="INVALID_TIMELINE_SELECTION",
             details={
                 "expected_start_supplied": has_start,
                 "expected_end_supplied": has_end,
                 "num_days_supplied": has_num_days,
+                "global_min_max_selected": use_global_min_max,
             },
         )
 
-    if has_date_range:
+    if has_start and has_end:
         start = parse_timeline_boundary(
             expected_start,
             "expected_start",
@@ -461,6 +486,61 @@ def resolve_expected_timeline(
             index=timeline_index,
         )
 
+    available_timestamps = valid_timestamps.dropna()
+
+    if available_timestamps.empty:
+        raise InputValidationError(
+            "The expected timeline cannot be resolved because no valid "
+            "timestamp is available after site filtering.",
+            error_code="NO_VALID_TIMESTAMP_FOR_TIMELINE",
+        )
+
+    start = pd.Timestamp(
+        available_timestamps.min()
+    )
+
+    if use_global_min_max:
+        end = pd.Timestamp(
+            available_timestamps.max()
+        )
+
+        if end < start:
+            raise InputValidationError(
+                "The resolved maximum timestamp is earlier than the "
+                "resolved minimum timestamp.",
+                error_code="INVALID_GLOBAL_TIMESTAMP_ORDER",
+                details={
+                    "global_min_timestamp": str(start),
+                    "global_max_timestamp": str(end),
+                },
+            )
+
+        timeline_index = pd.date_range(
+            start=start,
+            end=end,
+            freq=frequency,
+        )
+
+        if timeline_index.empty:
+            raise InputValidationError(
+                "The global minimum and maximum could not produce an "
+                "expected timestamp timeline.",
+                error_code="EMPTY_GLOBAL_MIN_MAX_TIMELINE",
+                details={
+                    "global_min_timestamp": str(start),
+                    "global_max_timestamp": str(end),
+                    "expected_frequency": str(frequency),
+                },
+            )
+
+        return ExpectedTimeline(
+            method="global_min_max",
+            start=start,
+            end=end,
+            frequency=frequency,
+            index=timeline_index,
+        )
+
     if not isinstance(num_days, int) or isinstance(num_days, bool):
         raise InputValidationError(
             "num_days must be supplied as a positive integer.",
@@ -479,15 +559,6 @@ def resolve_expected_timeline(
             },
         )
 
-    available_timestamps = valid_timestamps.dropna()
-
-    if available_timestamps.empty:
-        raise InputValidationError(
-            "num_days cannot be resolved because no valid timestamp is "
-            "available after site filtering.",
-            error_code="NO_VALID_TIMESTAMP_FOR_NUM_DAYS",
-        )
-
     one_day = pd.Timedelta(days=1)
 
     if one_day % frequency != pd.Timedelta(0):
@@ -504,9 +575,6 @@ def resolve_expected_timeline(
         one_day / frequency
     )
     expected_periods = num_days * timestamps_per_day
-    start = pd.Timestamp(
-        available_timestamps.min()
-    )
     end = start + (
         expected_periods - 1
     ) * frequency
@@ -524,6 +592,7 @@ def resolve_expected_timeline(
         frequency=frequency,
         index=timeline_index,
     )
+
 
 
 def add_composite_id(
@@ -1567,18 +1636,15 @@ def analyse_data_integrity(
     expected_start: datetime | str | pd.Timestamp | None = None,
     expected_end: datetime | str | pd.Timestamp | None = None,
     num_days: int | None = None,
+    use_global_min_max: bool = False,
 ) -> DataIntegrityResult:
     """
     Run timestamp-integrity analysis for every site from site analysis.
 
     This is the main orchestration function for ``data_integrity.py``. The EDA
     runner supplies the loaded KPI dataframe, source path, site-analysis output
-    path, and destination directory.
-
-    Exactly one timeline method is mandatory:
-
-    - explicit ``expected_start`` and ``expected_end``; or
-    - positive ``num_days`` counted from the first valid source timestamp.
+    path, destination directory, resolved bucket frequency, and exactly one
+    timeline method.
 
     Args:
         dataframe:
@@ -1611,6 +1677,10 @@ def analyse_data_integrity(
         num_days:
             Optional number of complete days counted from the earliest valid
             timestamp after site filtering.
+
+        use_global_min_max:
+            Whether to use the earliest and latest valid timestamps found in
+            this prepared KPI dataframe after site filtering.
 
     Returns:
         DataIntegrityResult:
@@ -1677,6 +1747,7 @@ def analyse_data_integrity(
         expected_start=expected_start,
         expected_end=expected_end,
         num_days=num_days,
+        use_global_min_max=use_global_min_max,
     )
 
     rows_before_timeline = int(
@@ -1751,8 +1822,6 @@ def analyse_data_integrity(
         / DUPLICATE_DETAILS_FILE_NAME
     )
 
-    # ``output_prefix`` is intentionally calculated and logged so the runner
-    # may later choose KPI-prefixed filenames without changing the analysis.
     logger.debug(
         "Resolved data-integrity output prefix for %s as %s.",
         resolved_source_file.name,

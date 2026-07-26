@@ -13,22 +13,80 @@ This script verifies that:
 The script does not read, create, modify, or delete any pipeline dataset or
 report file.
 
-Run from the backend project root with:
+Recommended location:
 
-    python sanity_check_eda_connections.py
+    ml_backend/tests/sanity_check_eda_connections.py
+
+Run from any working directory with:
+
+    python <path-to-ml_backend>/tests/sanity_check_eda_connections.py
+
+The script locates the nearest parent directory containing ``app`` and adds
+that backend project root to Python's module search path.
 
 Update the module constants below only if these files live in a package other
-than ``app.eda``.
+than ``app.ml.eda``.
 """
 
 from __future__ import annotations
 
 import importlib
 import inspect
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
+
+
+def configure_project_import_path() -> Path:
+    """
+    Add the backend project root to Python's module search path.
+
+    The sanity script may be stored inside ``ml_backend/tests``. When a
+    Python file is executed directly, Python normally adds the script's own
+    directory to ``sys.path`` but does not automatically add its parent.
+    This function walks upward until it finds the directory containing
+    ``app`` and inserts that directory at the beginning of ``sys.path``.
+
+    Args:
+        None.
+
+    Returns:
+        Path:
+            Located backend project root containing the ``app`` package.
+
+    Raises:
+        RuntimeError:
+            If no parent directory containing ``app`` can be found.
+    """
+
+    script_path = Path(__file__).resolve()
+
+    for candidate in script_path.parents:
+        app_directory = candidate / "app"
+
+        if app_directory.is_dir():
+            project_root = candidate
+            project_root_text = str(project_root)
+
+            if project_root_text not in sys.path:
+                sys.path.insert(
+                    0,
+                    project_root_text,
+                )
+
+            return project_root
+
+    raise RuntimeError(
+        "Could not locate the backend project root. The sanity script "
+        "must be stored somewhere inside the ml_backend project that "
+        "contains the app directory."
+    )
+
+
+PROJECT_ROOT = configure_project_import_path()
 
 
 DATASET_MODULE = "app.schemas.common.dataset"
