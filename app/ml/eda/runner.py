@@ -1,18 +1,32 @@
 """
 Run dataset preparation and Part A EDA for one pipeline input.
 
+The caller gives this runner one root output directory. The runner owns the
+complete EDA directory layout:
+
+    <output_directory>/
+        prepared_datasets/
+            KPI_A.csv
+            KPI_B.csv
+        summaries/
+            KPI_A/
+                ...site and integrity reports...
+            KPI_B/
+                ...site and integrity reports...
+
 The runner performs orchestration only. It:
 
-1. calls ``prepare_dataset``;
-2. loops through every prepared KPI-specific CSV;
-3. creates one summary directory beside each prepared KPI file;
-4. runs site analysis;
-5. runs server validation;
-6. runs timestamp data-integrity analysis; and
-7. returns structured metadata containing every generated path.
+1. creates the runner-controlled output directories;
+2. calls ``prepare_dataset`` with the exact prepared-dataset directory;
+3. loops through every prepared KPI-specific CSV;
+4. creates one KPI-specific directory under ``summaries``;
+5. runs site analysis;
+6. runs server validation;
+7. runs timestamp data-integrity analysis; and
+8. returns structured metadata containing every generated path.
 
-The runner does not reconstruct output filenames created by individual stages.
-Instead, it passes exact paths returned by one stage into the next stage.
+Individual stages may construct filenames inside directories supplied by the
+runner, but they no longer decide where those directories are located.
 """
 
 from __future__ import annotations
@@ -91,6 +105,16 @@ class EDARunnerResult:
     Store the complete result of dataset preparation and Part A EDA.
 
     Attributes:
+        output_directory:
+            Root output directory supplied to the runner.
+
+        prepared_datasets_directory:
+            Runner-created directory containing normalized KPI CSV files.
+
+        summaries_directory:
+            Runner-created parent directory containing one report directory
+            per KPI.
+
         preparation:
             Complete metadata returned by dataset preparation.
 
@@ -98,6 +122,9 @@ class EDARunnerResult:
             Part A results for every prepared KPI-specific dataset.
     """
 
+    output_directory: Path
+    prepared_datasets_directory: Path
+    summaries_directory: Path
     preparation: DatasetPreparationResult
     kpi_results: tuple[KPIEDARunResult, ...]
 
@@ -259,21 +286,26 @@ def resolve_integrity_timeline_inputs(
 
 def build_kpi_summary_directory(
     prepared_dataset: PreparedKPIDataset,
+    summaries_directory: str | Path,
 ) -> Path:
     """
-    Create the summary directory for one prepared KPI file.
+    Create the runner-controlled summary directory for one KPI file.
 
-    The folder is created beside the prepared KPI CSV using:
+    The folder is created under the supplied summaries parent using the
+    prepared KPI filename stem:
 
-        <prepared_file_stem>_summary
+        <summaries_directory>/<prepared_file_stem>/
 
     Args:
         prepared_dataset:
             Metadata for the prepared KPI-specific file.
 
+        summaries_directory:
+            Runner-controlled parent directory for all KPI summaries.
+
     Returns:
         Path:
-            Resolved summary-directory path.
+            Resolved KPI summary-directory path.
 
     Raises:
         FileProcessingError:
@@ -281,11 +313,11 @@ def build_kpi_summary_directory(
     """
 
     summary_folder_name = sanitise_filename(
-        f"{prepared_dataset.file_path.stem}_summary"
+        prepared_dataset.file_path.stem
     )
 
     return ensure_directory(
-        prepared_dataset.file_path.parent
+        Path(summaries_directory)
         / summary_folder_name
     )
 
@@ -293,13 +325,21 @@ def build_kpi_summary_directory(
 def run_eda_pipeline(
     config: DatasetInputConfig,
     logger: Logger,
+    *,
+    output_directory: str | Path,
 ) -> EDARunnerResult:
     """
     Run dataset preparation and Part A EDA for every resolved KPI.
 
-    This is the main orchestration function. Exceptions are intentionally
-    allowed to propagate to the higher workflow layer, which can update the
-    run manifest and mark the complete run as failed.
+    The caller supplies one root output directory. This runner creates and
+    controls the following structure inside it:
+
+        prepared_datasets/
+        summaries/<prepared_kpi_file_stem>/
+
+    Exceptions are intentionally allowed to propagate to the higher workflow
+    layer, which can update the run manifest and mark the complete run as
+    failed.
 
     Timeline selection is read entirely from
     ``config.expected_timeline``. The runner therefore has one validated
@@ -313,10 +353,14 @@ def run_eda_pipeline(
         logger:
             Run-specific logger used by all called stages.
 
+        output_directory:
+            Root directory where this EDA run must save all prepared datasets
+            and reports.
+
     Returns:
         EDARunnerResult:
-            Dataset-preparation metadata and one structured EDA result
-            for every prepared KPI file.
+            Runner-controlled directories, dataset-preparation metadata, and
+            one structured EDA result for every prepared KPI file.
 
     Raises:
         InputValidationError:
@@ -326,14 +370,33 @@ def run_eda_pipeline(
             If input, preparation, or report files cannot be processed.
     """
 
+    resolved_output_directory = ensure_directory(
+        output_directory
+    )
+
+    prepared_datasets_directory = ensure_directory(
+        resolved_output_directory
+        / "prepared_datasets"
+    )
+
+    summaries_directory = ensure_directory(
+        resolved_output_directory
+        / "summaries"
+    )
+
     logger.info(
-        "Starting dataset preparation and Part A EDA for %s.",
+        "Starting dataset preparation and Part A EDA for %s. Root "
+        "output directory: %s.",
         config.input_file,
+        resolved_output_directory,
     )
 
     preparation_result = prepare_dataset(
         config=config,
         logger=logger,
+        dataset_directory=(
+            prepared_datasets_directory
+        ),
     )
 
     expected_frequency = convert_bucket_to_frequency(
@@ -366,7 +429,12 @@ def run_eda_pipeline(
 
         summary_directory = (
             build_kpi_summary_directory(
-                prepared_dataset
+                prepared_dataset=(
+                    prepared_dataset
+                ),
+                summaries_directory=(
+                    summaries_directory
+                ),
             )
         )
 
@@ -420,6 +488,15 @@ def run_eda_pipeline(
         )
 
     result = EDARunnerResult(
+        output_directory=(
+            resolved_output_directory
+        ),
+        prepared_datasets_directory=(
+            prepared_datasets_directory
+        ),
+        summaries_directory=(
+            summaries_directory
+        ),
         preparation=preparation_result,
         kpi_results=tuple(
             kpi_results
@@ -428,8 +505,9 @@ def run_eda_pipeline(
 
     logger.info(
         "Dataset preparation and Part A EDA completed for %d KPI "
-        "dataset(s).",
+        "dataset(s). Root output directory: %s.",
         len(result.kpi_results),
+        result.output_directory,
     )
 
     return result

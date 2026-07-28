@@ -4,20 +4,13 @@ Prepare an input CSV for the telecom anomaly-detection pipeline.
 This module performs the common preparation required before EDA,
 preprocessing, feature engineering, training, or inference.
 
-The workflow should first copy the uploaded input file into the run's input
-directory. This module then creates a sibling directory named:
+The caller supplies the exact directory where prepared KPI files must be
+written. The EDA runner is therefore responsible for deciding the output
+location and directory structure.
 
-    <input_file_stem>_dataset
+Example runner-controlled destination:
 
-and writes one normalized CSV per KPI into that directory.
-
-Example:
-
-    runs/<run_id>/input/amf_data.csv
-
-becomes:
-
-    runs/<run_id>/input/amf_data_dataset/
+    runs/<run_id>/eda/prepared_datasets/
         KPI_A.csv
         KPI_B.csv
 
@@ -775,23 +768,29 @@ def write_kpi_datasets(
 def prepare_dataset(
     config: DatasetInputConfig,
     logger: Logger,
+    *,
+    dataset_directory: str | Path,
 ) -> DatasetPreparationResult:
     """
     Validate and prepare an input CSV for downstream ML stages.
 
-    The function reuses the existing file service for input validation,
-    CSV loading, directory creation, filename sanitization, and CSV
-    writing.
+    The caller supplies the exact destination directory. This function
+    validates and creates that directory when necessary, but it does not
+    derive an output location from the input-file path.
 
-    A folder named ``<input_file_stem>_dataset`` is created beside the
-    source CSV. One normalized CSV is written per KPI, including when
-    the source contains only one KPI.
+    One normalized CSV is written per KPI, including when the source contains
+    only one KPI.
 
     Args:
         config:
             Validated shared dataset input configuration.
+
         logger:
             Run-specific logger used to record preparation activity.
+
+        dataset_directory:
+            Exact directory where the normalized KPI-specific CSV files must
+            be written. The EDA runner should supply this path.
 
     Returns:
         DatasetPreparationResult:
@@ -803,9 +802,10 @@ def prepare_dataset(
             If the input contains no rows, mandatory columns are
             missing, KPI identity cannot be resolved, or bucket
             metadata is invalid or contradictory.
+
         FileProcessingError:
             If the file service cannot validate or read the source,
-            create the output directory, or write an output file.
+            create the supplied output directory, or write an output file.
     """
 
     input_path = (
@@ -818,9 +818,15 @@ def prepare_dataset(
         input_path
     )
 
+    resolved_dataset_directory = ensure_directory(
+        dataset_directory
+    )
+
     logger.info(
-        "Starting dataset preparation for %s.",
+        "Starting dataset preparation for %s. Prepared datasets will be "
+        "written to %s.",
         input_path,
+        resolved_dataset_directory,
     )
 
     dataframe = read_csv_file(
@@ -857,28 +863,23 @@ def prepare_dataset(
         )
     )
 
-    folder_name = sanitise_filename(
-        f"{input_path.stem}_dataset"
-    )
-
-    dataset_directory = ensure_directory(
-        input_path.parent
-        / folder_name
-    )
-
     prepared_datasets = write_kpi_datasets(
         dataframe=dataframe,
         kpi_names=kpi_names,
         kpi_column=(
             config.columns.kpi_name_column
         ),
-        dataset_directory=dataset_directory,
+        dataset_directory=(
+            resolved_dataset_directory
+        ),
         logger=logger,
     )
 
     result = DatasetPreparationResult(
         source_file=input_path,
-        dataset_directory=dataset_directory,
+        dataset_directory=(
+            resolved_dataset_directory
+        ),
         bucket=resolved_bucket,
         prepared_datasets=prepared_datasets,
         total_input_rows=len(
