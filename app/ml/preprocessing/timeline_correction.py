@@ -277,7 +277,17 @@ def add_composite_id(
     """
 
     result = dataframe.copy()
-    site_columns = list(columns.get_site_identity_columns())
+
+    if result.empty:
+        result[COMPOSITE_ID_COLUMN] = pd.Series(
+            index=result.index,
+            dtype="string",
+        )
+        return result
+
+    site_columns = list(
+        columns.get_site_identity_columns()
+    )
 
     identity_values = (
         result[site_columns]
@@ -285,9 +295,11 @@ def add_composite_id(
         .fillna(MISSING_ID_VALUE)
     )
 
-    result[COMPOSITE_ID_COLUMN] = identity_values.agg(
-        COMPOSITE_ID_SEPARATOR.join,
-        axis=1,
+    result[COMPOSITE_ID_COLUMN] = (
+        identity_values.agg(
+            COMPOSITE_ID_SEPARATOR.join,
+            axis=1,
+        )
     )
 
     return result
