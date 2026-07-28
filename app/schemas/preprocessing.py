@@ -809,7 +809,7 @@ class ResolvedFrequencyConfig(BaseModel):
     phase_3_level_1_min_clean_values: int
 
     points_per_day: int | None = None
-    prophet_minimum_history_points: int
+    prophet_minimum_history_points: int | None = None
 
 
 class PreprocessingConfig(BaseModel):
@@ -1065,19 +1065,22 @@ class PreprocessingConfig(BaseModel):
         if 1_440 % bucket_minutes == 0:
             points_per_day = 1_440 // bucket_minutes
 
-        prophet_history_points = self.phase_4.minimum_history_points
+        prophet_history_points: int | None = None
 
-        if prophet_history_points is None:
-            if points_per_day is None:
-                raise ValueError(
-                    "phase_4.minimum_history_points is required when the "
-                    "resolved bucket does not divide evenly into one day."
+        if self.phase_4.enabled:
+            prophet_history_points = self.phase_4.minimum_history_points
+
+            if prophet_history_points is None:
+                if points_per_day is None:
+                    raise ValueError(
+                        "phase_4.minimum_history_points is required when the "
+                        "resolved bucket does not divide evenly into one day."
+                    )
+
+                prophet_history_points = (
+                    self.phase_4.minimum_history_days
+                    * points_per_day
                 )
-
-            prophet_history_points = (
-                self.phase_4.minimum_history_days
-                * points_per_day
-            )
 
         return ResolvedFrequencyConfig(
             bucket_minutes=bucket_minutes,
@@ -1234,6 +1237,12 @@ def _bucket_to_whole_minutes(
     if minutes <= 0:
         raise ValueError(
             "The resolved preprocessing bucket must be positive."
+        )
+
+    if 1_440 % minutes != 0:
+        raise ValueError(
+            "The bucket must divide evenly into 1,440 minutes so that "
+            "every day contains a whole number of observations."
         )
 
     return int(minutes)
