@@ -1951,11 +1951,16 @@ def process_one_site(
     values = pd.to_numeric(
         ordered[columns.value_column],
         errors="coerce",
-    ).to_numpy(dtype=float)
+    ).to_numpy(
+        dtype=float,
+        copy=True
+        )
     labels = pd.to_numeric(
         ordered[CURRENT_STATUS_LABEL_COLUMN],
         errors="raise",
-    ).to_numpy(dtype=np.int8)
+    ).to_numpy(dtype=np.int8,
+        copy=True
+        )
     original_labels = pd.to_numeric(
         ordered[ORIGINAL_CONDITION_LABEL_COLUMN],
         errors="raise",
