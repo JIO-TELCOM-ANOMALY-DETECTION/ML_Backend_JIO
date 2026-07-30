@@ -1,0 +1,87 @@
+"""Default values for the Part B preprocessing schema.
+
+This module contains data-only defaults. It deliberately does not import
+Pydantic models from ``preprocessing.py`` so the package has no circular
+imports. Validation and bucket-dependent resolution remain in
+``preprocessing.py``.
+"""
+
+from __future__ import annotations
+
+from typing import Final
+
+
+DEFAULT_DUPLICATE_TIMESTAMP_STRATEGY: Final = "keep_first"
+DEFAULT_OFF_GRID_TIMESTAMP_STRATEGY: Final = "reject"
+
+DEFAULT_LOWER_BOUND: Final = 0.0
+DEFAULT_UPPER_BOUND: Final = 100.0
+DEFAULT_BOUNDARY_TOLERANCE: Final = 0.001
+DEFAULT_CLIP_VALUES_WITHIN_TOLERANCE: Final = True
+DEFAULT_CLIP_GENERATED_VALUES: Final = True
+
+DEFAULT_MAXIMUM_MISSING_PERCENTAGE: Final = 20.0
+
+DEFAULT_OUTLIER_DIRECTION: Final = "lower_only"
+DEFAULT_IQR_MULTIPLIER: Final = 1.5
+DEFAULT_CENTERED_WINDOW_MINUTES: Final = 1_440
+DEFAULT_CENTERED_MIN_VALID_MINUTES: Final = 720
+
+DEFAULT_FIVE_MINUTE_GAP_RANGES: Final = (
+    (1, 3),
+    (4, 12),
+    (13, 72),
+    (73, 288),
+    (289, None),
+)
+
+DEFAULT_FIFTEEN_MINUTE_GAP_RANGES: Final = (
+    (1, 1),
+    (2, 4),
+    (5, 24),
+    (25, 96),
+    (97, None),
+)
+
+DEFAULT_MAXIMUM_ANCHOR_SEARCH_MINUTES: Final = 60
+DEFAULT_MAXIMUM_TWO_SIDED_DISTANCE_MINUTES: Final = 30
+DEFAULT_MAXIMUM_ANCHOR_DISTANCE_RATIO: Final = 2.0
+
+DEFAULT_RECENT_SAME_TYPE_LOOKBACK_DAYS: Final = 14
+DEFAULT_LAST_WEEK_LOOKBACK_DAYS: Final = 7
+DEFAULT_RECENT_WEIGHT: Final = 0.8
+DEFAULT_LAST_WEEK_WEIGHT: Final = 0.2
+DEFAULT_NEIGHBOR_OFFSET_MINUTES: Final = None
+
+DEFAULT_MAXIMUM_SAME_TYPE_DAYS: Final = 4
+DEFAULT_MAXIMUM_LOOKBACK_DAYS: Final = 30
+DEFAULT_LEVEL_1_WINDOW_MINUTES: Final = 15
+DEFAULT_LEVEL_2_WINDOW_MINUTES: Final = 30
+DEFAULT_LEVEL_1_MIN_CLEAN_VALUES_BY_BUCKET: Final = {
+    5: 5,
+    15: 3,
+}
+DEFAULT_LEVEL_2_MIN_CLEAN_VALUES: Final = 2
+DEFAULT_LEVEL_4_MIN_CLEAN_VALUES: Final = 2
+
+DEFAULT_PHASE_4_ENABLED: Final = True
+DEFAULT_ALLOW_FULL_SERIES_FALLBACK: Final = True
+DEFAULT_MINIMUM_HISTORY_DAYS: Final = 14
+DEFAULT_CHANGEPOINT_PRIOR_SCALE: Final = 0.3
+DEFAULT_SEASONALITY_PRIOR_SCALE: Final = 20.0
+DEFAULT_SEASONALITY_MODE: Final = "additive"
+DEFAULT_DAILY_SEASONALITY: Final = True
+DEFAULT_WEEKLY_SEASONALITY: Final = True
+DEFAULT_YEARLY_SEASONALITY: Final = False
+DEFAULT_INTERVAL_WIDTH: Final = 0.95
+DEFAULT_NOISE_SCALE: Final = 1.0
+DEFAULT_RANDOM_SEED: Final = 42
+
+DEFAULT_SAVE_INTERMEDIATE_OUTPUTS: Final = False
+
+
+__all__ = [
+    name
+    for name in globals()
+    if name.startswith("DEFAULT_")
+]
