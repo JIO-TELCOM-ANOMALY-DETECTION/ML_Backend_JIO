@@ -1,6 +1,17 @@
-"""exports for Part C feature-engineering schemas and defaults."""
+"""Part C feature-engineering schemas and algorithm defaults.
 
-from .defaults import DefaultFeatureProfileConfig
+Intended project filename::
+
+    app/schemas/feature_engineering/__init__.py
+"""
+
+from .defaults import (
+    DefaultFeatureProfileConfig,
+    DefaultFeatureProfileName,
+    DefaultFeatureProfilesConfig,
+    IsolationForestDefaultFeatureProfileConfig,
+    XGBoostDefaultFeatureProfileConfig,
+)
 from .feature_engineering import (
     BaselineFeatureRequest,
     BaselineMethod,
@@ -39,11 +50,14 @@ __all__ = [
     "CorrectedHistoryConfig",
     "CurrentValueFeatureRequest",
     "DefaultFeatureProfileConfig",
+    "DefaultFeatureProfileName",
+    "DefaultFeatureProfilesConfig",
     "DifferenceFeatureRequest",
     "EWMAFeatureRequest",
     "FeatureEngineeringConfig",
     "FeatureRequest",
     "FeatureSource",
+    "IsolationForestDefaultFeatureProfileConfig",
     "LagFeatureRequest",
     "LocalMedianCleaningConfig",
     "PercentageChangeFeatureRequest",
@@ -58,6 +72,7 @@ __all__ = [
     "TimeCyclicFeature",
     "TimeCyclicFeatureRequest",
     "WeightedSeasonalBaselineConfig",
+    "XGBoostDefaultFeatureProfileConfig",
     "get_feature_columns",
     "get_request_history_requirements",
 ]

@@ -29,9 +29,9 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    TypeAdapter,
     field_validator,
     model_validator,
-    TypeAdapter,
 )
 
 from app.schemas.common.dataset import BucketConfig
@@ -1102,7 +1102,11 @@ FeatureRequest: TypeAlias = Annotated[
 
 _FEATURE_REQUEST_ADAPTER = TypeAdapter(FeatureRequest)
 
-from .defaults import DefaultFeatureProfileConfig
+
+from .defaults import (
+    DefaultFeatureProfileName,
+    DefaultFeatureProfilesConfig,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1327,10 +1331,19 @@ class FeatureEngineeringConfig(BaseModel):
         ),
     )
 
-    default_features: DefaultFeatureProfileConfig = Field(
-        default_factory=DefaultFeatureProfileConfig,
+    default_profile: DefaultFeatureProfileName = Field(
+        default="xgboost",
         description=(
-            "Schema-owned defaults used only when features is omitted."
+            "Algorithm-specific default profile used only when features is "
+            "omitted."
+        ),
+    )
+
+    default_features: DefaultFeatureProfilesConfig = Field(
+        default_factory=DefaultFeatureProfilesConfig,
+        description=(
+            "Schema-owned XGBoost and Isolation Forest defaults used only "
+            "when features is omitted."
         ),
     )
 
@@ -1420,6 +1433,7 @@ class FeatureEngineeringConfig(BaseModel):
             effective_features = list(self.features)
         else:
             default_payloads = self.default_features.build_request_payloads(
+                profile=self.default_profile,
                 bucket_minutes=bucket_minutes,
                 points_per_day=points_per_day,
             )
@@ -1544,7 +1558,8 @@ __all__ = [
     "CalendarFeatureRequest",
     "CorrectedHistoryConfig",
     "CurrentValueFeatureRequest",
-    "DefaultFeatureProfileConfig",
+    "DefaultFeatureProfileName",
+    "DefaultFeatureProfilesConfig",
     "DifferenceFeatureRequest",
     "EWMAFeatureRequest",
     "FeatureEngineeringConfig",
