@@ -29,6 +29,7 @@ from typing import Any, Literal, Protocol, TypeAlias
 
 import pandas as pd
 
+from app.schemas.common.dataset import DatasetInputConfig
 
 FeatureSourceName: TypeAlias = Literal[
     "raw_value",
@@ -36,20 +37,26 @@ FeatureSourceName: TypeAlias = Literal[
 ]
 
 
-class DatasetColumnMappingProtocol(Protocol):
-    """Minimum column-mapping interface required from DatasetInputConfig."""
+# ---------------------------------------------------------------------------
+# NOT NEEDED AS DATASET-CONFIGS IS NOW CALLED FROM APP/SCHEMA/COMMON/DATASET
+# ---------------------------------------------------------------------------
 
-    timestamp_column: str
-    value_column: str
+# class DatasetColumnMappingProtocol(Protocol):
+#     """Minimum column-mapping interface required from DatasetInputConfig."""
 
-    def get_site_identity_columns(self) -> Sequence[str]:
-        """Return the physical columns that uniquely identify one site."""
+#     timestamp_column: str
+#     value_column: str
+
+#     def get_site_identity_columns(self) -> Sequence[str]:
+#         """Return the physical columns that uniquely identify one site."""
 
 
-class DatasetConfigProtocol(Protocol):
-    """Minimum dataset configuration interface required by this module."""
+# class DatasetConfigProtocol(Protocol):
+#     """Minimum dataset configuration interface required by this module."""
 
-    columns: DatasetColumnMappingProtocol
+#     columns: DatasetColumnMappingProtocol
+
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,55 +155,63 @@ FeatureOutput: TypeAlias = pd.Series | pd.DataFrame
 # ---------------------------------------------------------------------------
 
 
-def resolve_feature_input_columns(
-    dataset_config: DatasetConfigProtocol,
-) -> FeatureInputColumns:
-    """Resolve physical site, timestamp, and KPI-value columns.
 
-    The function depends only on the public column-mapping interface already
-    used by Parts A and B. It does not hardcode Jio dataset column names.
-    """
+# ---------------------------------------------------------------------------
+# NOT NEEDED AS DATASET-CONFIGS IS NOW CALLED FROM APP/SCHEMA/COMMON/DATASET
+# ---------------------------------------------------------------------------
 
-    site_columns = tuple(
-        dataset_config.columns.get_site_identity_columns()
-    )
-    timestamp_column = dataset_config.columns.timestamp_column
-    value_column = dataset_config.columns.value_column
+# def resolve_feature_input_columns(
+#     dataset_config: DatasetInputConfig,
+# ) -> FeatureInputColumns:
+#     """Resolve physical site, timestamp, and KPI-value columns.
 
-    if not site_columns:
-        raise ValueError(
-            "Dataset column mapping must provide at least one site identity "
-            "column."
-        )
+#     The function depends only on the public column-mapping interface already
+#     used by Parts A and B. It does not hardcode Jio dataset column names.
+#     """
 
-    all_columns = (
-        *site_columns,
-        timestamp_column,
-        value_column,
-    )
+#     site_columns = tuple(
+#         dataset_config.columns.get_site_identity_columns()
+#     )
+#     timestamp_column = dataset_config.columns.timestamp_column
+#     value_column = dataset_config.columns.value_column
 
-    empty_names = [
-        column
-        for column in all_columns
-        if not isinstance(column, str) or not column.strip()
-    ]
-    if empty_names:
-        raise ValueError(
-            "Resolved feature-engineering column names must be non-empty "
-            "strings."
-        )
+#     if not site_columns:
+#         raise ValueError(
+#             "Dataset column mapping must provide at least one site identity "
+#             "column."
+#         )
 
-    if len(all_columns) != len(set(all_columns)):
-        raise ValueError(
-            "Site identity, timestamp, and value columns must refer to "
-            "different physical columns."
-        )
+#     all_columns = (
+#         *site_columns,
+#         timestamp_column,
+#         value_column,
+#     )
 
-    return FeatureInputColumns(
-        site_identity_columns=site_columns,
-        timestamp_column=timestamp_column,
-        value_column=value_column,
-    )
+#     empty_names = [
+#         column
+#         for column in all_columns
+#         if not isinstance(column, str) or not column.strip()
+#     ]
+#     if empty_names:
+#         raise ValueError(
+#             "Resolved feature-engineering column names must be non-empty "
+#             "strings."
+#         )
+
+#     if len(all_columns) != len(set(all_columns)):
+#         raise ValueError(
+#             "Site identity, timestamp, and value columns must refer to "
+#             "different physical columns."
+#         )
+
+#     return FeatureInputColumns(
+#         site_identity_columns=site_columns,
+#         timestamp_column=timestamp_column,
+#         value_column=value_column,
+#     )
+
+
+
 
 
 def require_columns(
