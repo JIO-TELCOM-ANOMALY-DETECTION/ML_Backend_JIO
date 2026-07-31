@@ -3,7 +3,7 @@ Request schemas for Part C telecom feature engineering.
 
 Intended project location::
 
-    app/schemas/feature_engineering/feature_engineering_v2.py
+    app/schemas/feature_engineering/feature_engineering.py
 
 This module defines:
 

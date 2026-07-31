@@ -2,7 +2,7 @@
 
 Project location::
 
-    app/schemas/feature_engineering/defaults_v2.py
+    app/schemas/feature_engineering/defaults.py
 
 This module owns the default feature profile only. Custom requests bypass this
 profile and are validated by ``feature_engineering.py``. Intrinsic formula

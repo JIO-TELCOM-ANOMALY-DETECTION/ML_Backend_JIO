@@ -1,4 +1,4 @@
-"""Version-2 exports for Part C feature-engineering schemas and defaults."""
+"""exports for Part C feature-engineering schemas and defaults."""
 
 from .defaults import DefaultFeatureProfileConfig
 from .feature_engineering import (
