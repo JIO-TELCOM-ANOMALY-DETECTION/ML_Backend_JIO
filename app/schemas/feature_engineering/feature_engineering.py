@@ -36,6 +36,35 @@ from pydantic import (
 
 from app.schemas.common.dataset import BucketConfig
 
+from .defaults import (
+    DEFAULT_BASELINE_ANCHOR_STATUSES,
+    DEFAULT_BASELINE_ANCHOR_WINDOW_EACH_SIDE_POINTS,
+    DEFAULT_BASELINE_METHOD,
+    DEFAULT_BASELINE_MINIMUM_HISTORY_DAYS,
+    DEFAULT_BASELINE_RECENT_FALLBACK_DAYS,
+    DEFAULT_BASELINE_RECENT_WEIGHT,
+    DEFAULT_BASELINE_SLOT_FALLBACK_POINTS,
+    DEFAULT_BASELINE_SOURCE,
+    DEFAULT_BASELINE_WEEKLY_FALLBACK_WEEKS,
+    DEFAULT_BASELINE_WEEKLY_WEIGHT,
+    DEFAULT_CORRECTED_HISTORY_BAD_STATUSES,
+    DEFAULT_CORRECTED_HISTORY_FORWARD_FILL_REMAINING,
+    DEFAULT_CORRECTED_HISTORY_MINIMUM_PERIODS,
+    DEFAULT_CORRECTED_HISTORY_REPLACEMENT_METHOD,
+    DEFAULT_CORRECTED_HISTORY_REPLACE_MISSING_VALUES,
+    DEFAULT_CORRECTED_HISTORY_WINDOW_MINUTES,
+    DEFAULT_LOCAL_MEDIAN_ACCEPTED_STATUSES,
+    DEFAULT_LOCAL_MEDIAN_BAD_STATUSES,
+    DEFAULT_LOCAL_MEDIAN_ENABLED,
+    DEFAULT_LOCAL_MEDIAN_HALF_WINDOW_MINUTES,
+    DEFAULT_LOCAL_MEDIAN_MINIMUM_VALID_POINTS,
+    DEFAULT_LOCAL_MEDIAN_UNAVAILABLE_STRATEGY,
+    DEFAULT_RETAIN_ORIGINAL_COLUMNS,
+    DEFAULT_SAVE_INTERMEDIATE_OUTPUTS,
+    DefaultFeatureProfileName,
+    DefaultFeatureProfilesConfig,
+)
+
 
 FeatureSource = Literal[
     "raw_value",
@@ -207,7 +236,7 @@ class LocalMedianCleaningConfig(BaseModel):
     )
 
     enabled: bool = Field(
-        default=True,
+        default=DEFAULT_LOCAL_MEDIAN_ENABLED,
         description=(
             "Apply local median cleaning when a referenced historical point "
             "has an unacceptable status."
@@ -220,7 +249,7 @@ class LocalMedianCleaningConfig(BaseModel):
     )
 
     bad_statuses: set[int] = Field(
-        default_factory=lambda: {2},
+        default_factory=lambda: set(DEFAULT_LOCAL_MEDIAN_BAD_STATUSES),
         description=(
             "Statuses whose referenced values should be replaced before the "
             "feature is calculated."
@@ -228,14 +257,14 @@ class LocalMedianCleaningConfig(BaseModel):
     )
 
     accepted_statuses: set[int] = Field(
-        default_factory=lambda: {1, 3, 4},
+        default_factory=lambda: set(DEFAULT_LOCAL_MEDIAN_ACCEPTED_STATUSES),
         description=(
             "Statuses allowed to contribute values to the local median."
         ),
     )
 
     half_window_minutes: int | None = Field(
-        default=720,
+        default=DEFAULT_LOCAL_MEDIAN_HALF_WINDOW_MINUTES,
         gt=0,
         description=(
             "Minutes searched on each side of the referenced point. The "
@@ -253,11 +282,24 @@ class LocalMedianCleaningConfig(BaseModel):
     )
 
     minimum_valid_points: int = Field(
-        default=1,
+        default=DEFAULT_LOCAL_MEDIAN_MINIMUM_VALID_POINTS,
         gt=0,
         description=(
             "Minimum accepted values required before a local median can "
             "replace the referenced point."
+        ),
+    )
+
+    unavailable_strategy: Literal[
+        "auto",
+        "nan",
+        "keep_source",
+    ] = Field(
+        default=DEFAULT_LOCAL_MEDIAN_UNAVAILABLE_STRATEGY,
+        description=(
+            "Fallback when the local median lacks enough valid points. "
+            "auto keeps a finite corrected_history value but returns NaN for "
+            "an unacceptable raw_value reference."
         ),
     )
 
@@ -311,15 +353,30 @@ class LocalMedianCleaningConfig(BaseModel):
             return 0
 
         if self.half_window_points is not None:
+            available_window_points = 2 * self.half_window_points + 1
+            if self.minimum_valid_points > available_window_points:
+                raise ValueError(
+                    "minimum_valid_points cannot exceed the complete local "
+                    "median window size."
+                )
             return self.half_window_points
 
         assert self.half_window_minutes is not None
 
-        return _duration_to_points(
+        half_window_points = _duration_to_points(
             duration_minutes=self.half_window_minutes,
             bucket_minutes=bucket_minutes,
             field_name="half_window_minutes",
         )
+
+        available_window_points = 2 * half_window_points + 1
+        if self.minimum_valid_points > available_window_points:
+            raise ValueError(
+                "minimum_valid_points cannot exceed the complete local "
+                "median window size."
+            )
+
+        return half_window_points
 
 
 class CorrectedHistoryConfig(BaseModel):
@@ -336,28 +393,28 @@ class CorrectedHistoryConfig(BaseModel):
     )
 
     bad_statuses: set[int] = Field(
-        default_factory=lambda: {2},
+        default_factory=lambda: set(DEFAULT_CORRECTED_HISTORY_BAD_STATUSES),
         description=(
             "Statuses masked before trailing-median replacement."
         ),
     )
 
     replace_missing_values: bool = Field(
-        default=True,
+        default=DEFAULT_CORRECTED_HISTORY_REPLACE_MISSING_VALUES,
         description=(
             "Treat unresolved numeric NaN values as unavailable history."
         ),
     )
 
     replacement_method: Literal["trailing_median"] = Field(
-        default="trailing_median",
+        default=DEFAULT_CORRECTED_HISTORY_REPLACEMENT_METHOD,
         description=(
             "Method used to replace unavailable values in temporary history."
         ),
     )
 
     replacement_window_minutes: int | None = Field(
-        default=60,
+        default=DEFAULT_CORRECTED_HISTORY_WINDOW_MINUTES,
         gt=0,
         description=(
             "Trailing-median duration. The default represents the previous "
@@ -375,7 +432,7 @@ class CorrectedHistoryConfig(BaseModel):
     )
 
     minimum_periods: int = Field(
-        default=1,
+        default=DEFAULT_CORRECTED_HISTORY_MINIMUM_PERIODS,
         gt=0,
         description=(
             "Minimum previous clean values needed for trailing-median "
@@ -384,7 +441,7 @@ class CorrectedHistoryConfig(BaseModel):
     )
 
     forward_fill_remaining: bool = Field(
-        default=True,
+        default=DEFAULT_CORRECTED_HISTORY_FORWARD_FILL_REMAINING,
         description=(
             "Forward-fill values that remain unavailable after trailing "
             "median replacement."
@@ -454,15 +511,10 @@ class FeatureRequestBase(BaseModel):
     )
 
 
-class CurrentValueFeatureRequest(FeatureRequestBase):
-    """Request a model-ready current-value feature column."""
+class CurrentValueFeatureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
     type: Literal["current_value"]
-
-    source: FeatureSource = Field(
-        default="raw_value",
-        description="Value source copied into the current_value feature.",
-    )
 
 
 class LagFeatureRequest(FeatureRequestBase):
@@ -858,7 +910,7 @@ class RollingSlopeFeatureRequest(FeatureRequestBase):
 
     minimum_periods: int | None = Field(
         default=None,
-        gt=2,
+        ge=2,
         description=(
             "Minimum previous observations required. None requires a complete "
             "window."
@@ -915,22 +967,22 @@ class WeightedSeasonalBaselineConfig(BaseModel):
     )
 
     method: BaselineMethod = Field(
-        default="weighted_seasonal",
+        default=DEFAULT_BASELINE_METHOD,
         description="Baseline method selected for generation.",
     )
 
     source: FeatureSource = Field(
-        default="raw_value",
+        default=DEFAULT_BASELINE_SOURCE,
         description="Source from which accepted baseline anchors are selected.",
     )
 
     anchor_statuses: set[int] = Field(
-        default_factory=lambda: {1, 3},
+        default_factory=lambda: set(DEFAULT_BASELINE_ANCHOR_STATUSES),
         description="Statuses permitted to supply seasonal anchor values.",
     )
 
     recent_fallback_days: int = Field(
-        default=14,
+        default=DEFAULT_BASELINE_RECENT_FALLBACK_DAYS,
         gt=0,
         description=(
             "Maximum earlier matching weekday/weekend days searched for the "
@@ -939,27 +991,27 @@ class WeightedSeasonalBaselineConfig(BaseModel):
     )
 
     weekly_fallback_weeks: int = Field(
-        default=3,
+        default=DEFAULT_BASELINE_WEEKLY_FALLBACK_WEEKS,
         gt=0,
         description="Maximum earlier weekly anchors searched.",
     )
 
     recent_weight: float = Field(
-        default=0.8,
+        default=DEFAULT_BASELINE_RECENT_WEIGHT,
         ge=0.0,
         le=1.0,
         description="Weight assigned when both recent and weekly anchors exist.",
     )
 
     weekly_weight: float = Field(
-        default=0.2,
+        default=DEFAULT_BASELINE_WEEKLY_WEIGHT,
         ge=0.0,
         le=1.0,
         description="Weight assigned when both recent and weekly anchors exist.",
     )
 
     anchor_window_each_side_points: int = Field(
-        default=1,
+        default=DEFAULT_BASELINE_ANCHOR_WINDOW_EACH_SIDE_POINTS,
         ge=0,
         description=(
             "Number of neighbouring points on each side used to form a robust "
@@ -968,7 +1020,7 @@ class WeightedSeasonalBaselineConfig(BaseModel):
     )
 
     slot_fallback_points: int = Field(
-        default=10,
+        default=DEFAULT_BASELINE_SLOT_FALLBACK_POINTS,
         gt=0,
         description=(
             "Maximum earlier accepted values used by the same-time-slot median "
@@ -986,7 +1038,7 @@ class WeightedSeasonalBaselineConfig(BaseModel):
     )
 
     minimum_history_days: int = Field(
-        default=7,
+        default=DEFAULT_BASELINE_MINIMUM_HISTORY_DAYS,
         gt=0,
         description=(
             "Warm-up history required before baseline and residual values are "
@@ -1103,10 +1155,6 @@ FeatureRequest: TypeAlias = Annotated[
 _FEATURE_REQUEST_ADAPTER = TypeAdapter(FeatureRequest)
 
 
-from .defaults import (
-    DefaultFeatureProfileName,
-    DefaultFeatureProfilesConfig,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -1130,8 +1178,15 @@ class ResolvedFeatureEngineeringConfig(BaseModel):
         gt=0,
     )
 
-    corrected_history_window_points: int = Field(
+    corrected_history: CorrectedHistoryConfig
+
+    corrected_history_window_points: int | None = Field(
+        default=None,
         gt=0,
+        description=(
+            "Resolved trailing-median window. None when no requested feature "
+            "uses corrected_history."
+        ),
     )
 
     features: tuple[FeatureRequest, ...] = Field(
@@ -1151,6 +1206,7 @@ class ResolvedFeatureEngineeringConfig(BaseModel):
     )
 
     uses_corrected_history: bool
+    uses_local_median_cleaning: bool
     requires_status_column: bool
     retain_original_columns: bool
     save_intermediate_outputs: bool
@@ -1356,14 +1412,14 @@ class FeatureEngineeringConfig(BaseModel):
     )
 
     retain_original_columns: bool = Field(
-        default=True,
+        default=DEFAULT_RETAIN_ORIGINAL_COLUMNS,
         description=(
             "Retain all Part B columns and append generated feature columns."
         ),
     )
 
     save_intermediate_outputs: bool = Field(
-        default=False,
+        default=DEFAULT_SAVE_INTERMEDIATE_OUTPUTS,
         description=(
             "Allow the runner to save optional corrected-history or feature "
             "audit outputs."
@@ -1423,11 +1479,7 @@ class FeatureEngineeringConfig(BaseModel):
         )
         points_per_day = 1_440 // bucket_minutes
 
-        corrected_history_window_points = (
-            self.corrected_history.resolve_window_points(
-                bucket_minutes=bucket_minutes,
-            )
-        )
+        corrected_history_window_points: int | None = None
 
         if self.features is not None:
             effective_features = list(self.features)
@@ -1451,6 +1503,7 @@ class FeatureEngineeringConfig(BaseModel):
         minimum_history_points = 1
         maximum_lookback_points = 0
         uses_corrected_history = False
+        uses_local_median_cleaning = False
         requires_status_column = False
 
         for request in effective_features:
@@ -1507,20 +1560,50 @@ class FeatureEngineeringConfig(BaseModel):
                 point_cleaning is not None
                 and point_cleaning.enabled
             ):
-                point_cleaning.resolve_half_window_points(
-                    bucket_minutes=bucket_minutes,
+                half_window_points = (
+                    point_cleaning.resolve_half_window_points(
+                        bucket_minutes=bucket_minutes,
+                    )
                 )
+                uses_local_median_cleaning = True
                 requires_status_column = True
+                minimum_history_points = max(
+                    minimum_history_points,
+                    2 * half_window_points + 1,
+                )
+                maximum_lookback_points = max(
+                    maximum_lookback_points,
+                    request_lookback + half_window_points,
+                )
 
             if isinstance(request, BaselineFeatureRequest):
                 request.baseline.resolve_slot_tolerance_points(
                     bucket_minutes=bucket_minutes,
                 )
+                if request.baseline.anchor_window_each_side_points > 0:
+                    uses_local_median_cleaning = True
 
             if isinstance(request, ResidualFeatureRequest):
                 request.baseline.resolve_slot_tolerance_points(
                     bucket_minutes=bucket_minutes,
                 )
+                if request.baseline.anchor_window_each_side_points > 0:
+                    uses_local_median_cleaning = True
+
+        if uses_corrected_history:
+            corrected_history_window_points = (
+                self.corrected_history.resolve_window_points(
+                    bucket_minutes=bucket_minutes,
+                )
+            )
+            minimum_history_points = max(
+                minimum_history_points,
+                self.corrected_history.minimum_periods + 1,
+            )
+            maximum_lookback_points = max(
+                maximum_lookback_points,
+                corrected_history_window_points,
+            )
 
         duplicates = sorted({
             column
@@ -1537,6 +1620,7 @@ class FeatureEngineeringConfig(BaseModel):
         return ResolvedFeatureEngineeringConfig(
             bucket_minutes=bucket_minutes,
             points_per_day=points_per_day,
+            corrected_history=self.corrected_history,
             corrected_history_window_points=(
                 corrected_history_window_points
             ),
@@ -1545,6 +1629,7 @@ class FeatureEngineeringConfig(BaseModel):
             minimum_history_points=minimum_history_points,
             maximum_lookback_points=maximum_lookback_points,
             uses_corrected_history=uses_corrected_history,
+            uses_local_median_cleaning=uses_local_median_cleaning,
             requires_status_column=requires_status_column,
             retain_original_columns=self.retain_original_columns,
             save_intermediate_outputs=self.save_intermediate_outputs,

@@ -15,7 +15,7 @@ Custom feature requests bypass these profiles and are validated directly by
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypeAlias
+from typing import Any, Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -52,6 +52,42 @@ DefaultFeatureProfileName: TypeAlias = Literal[
     "xgboost",
     "isolation_forest",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Shared source-preparation defaults
+# ---------------------------------------------------------------------------
+
+DEFAULT_CORRECTED_HISTORY_BAD_STATUSES: Final = frozenset({2})
+DEFAULT_CORRECTED_HISTORY_REPLACE_MISSING_VALUES: Final = True
+DEFAULT_CORRECTED_HISTORY_REPLACEMENT_METHOD: Final = "trailing_median"
+DEFAULT_CORRECTED_HISTORY_WINDOW_MINUTES: Final = 60
+DEFAULT_CORRECTED_HISTORY_MINIMUM_PERIODS: Final = 1
+DEFAULT_CORRECTED_HISTORY_FORWARD_FILL_REMAINING: Final = True
+
+# Local point cleaning is opt-in. The algorithm defaults already use the
+# globally corrected history for lag/comparison features, while the seasonal
+# baseline performs its own robust local-anchor median.
+DEFAULT_LOCAL_MEDIAN_ENABLED: Final = False
+DEFAULT_LOCAL_MEDIAN_BAD_STATUSES: Final = frozenset({2})
+DEFAULT_LOCAL_MEDIAN_ACCEPTED_STATUSES: Final = frozenset({1, 3, 4})
+DEFAULT_LOCAL_MEDIAN_HALF_WINDOW_MINUTES: Final = 720
+DEFAULT_LOCAL_MEDIAN_MINIMUM_VALID_POINTS: Final = 1
+DEFAULT_LOCAL_MEDIAN_UNAVAILABLE_STRATEGY: Final = "auto"
+
+DEFAULT_BASELINE_METHOD: Final = "weighted_seasonal"
+DEFAULT_BASELINE_SOURCE: Final = "raw_value"
+DEFAULT_BASELINE_ANCHOR_STATUSES: Final = frozenset({1, 3})
+DEFAULT_BASELINE_RECENT_FALLBACK_DAYS: Final = 14
+DEFAULT_BASELINE_WEEKLY_FALLBACK_WEEKS: Final = 3
+DEFAULT_BASELINE_RECENT_WEIGHT: Final = 0.8
+DEFAULT_BASELINE_WEEKLY_WEIGHT: Final = 0.2
+DEFAULT_BASELINE_ANCHOR_WINDOW_EACH_SIDE_POINTS: Final = 1
+DEFAULT_BASELINE_SLOT_FALLBACK_POINTS: Final = 10
+DEFAULT_BASELINE_MINIMUM_HISTORY_DAYS: Final = 7
+
+DEFAULT_RETAIN_ORIGINAL_COLUMNS: Final = True
+DEFAULT_SAVE_INTERMEDIATE_OUTPUTS: Final = False
 
 
 def _validate_unique_positive_integers(
@@ -177,6 +213,14 @@ class XGBoostDefaultFeatureProfileConfig(_DefaultProfileBase):
         default="corrected_history",
     )
 
+    lag_point_cleaning_enabled: bool = Field(
+        default=DEFAULT_LOCAL_MEDIAN_ENABLED,
+        description=(
+            "Apply an additional local median to lag references. Disabled "
+            "because the default lag source is already corrected_history."
+        ),
+    )
+
     include_previous_point_lag: bool = Field(
         default=True,
     )
@@ -252,6 +296,9 @@ class XGBoostDefaultFeatureProfileConfig(_DefaultProfileBase):
                     "type": "lag",
                     "lags": sorted(set(lags)),
                     "source": self.lag_source,
+                    "point_cleaning": {
+                        "enabled": self.lag_point_cleaning_enabled,
+                    },
                 }
             )
 
@@ -298,7 +345,15 @@ class IsolationForestDefaultFeatureProfileConfig(_DefaultProfileBase):
     )
 
     lag_source: FeatureSource = Field(
-        default="raw_value",
+        default="corrected_history",
+    )
+
+    lag_point_cleaning_enabled: bool = Field(
+        default=DEFAULT_LOCAL_MEDIAN_ENABLED,
+        description=(
+            "Apply an additional local median to the daily lag reference. "
+            "Disabled because the default source is corrected_history."
+        ),
     )
 
     include_daily_lag: bool = Field(
@@ -306,7 +361,7 @@ class IsolationForestDefaultFeatureProfileConfig(_DefaultProfileBase):
     )
 
     rolling_source: FeatureSource = Field(
-        default="raw_value",
+        default="corrected_history",
     )
 
     rolling_statistics: list[RollingStatistic] = Field(
@@ -322,7 +377,20 @@ class IsolationForestDefaultFeatureProfileConfig(_DefaultProfileBase):
     )
 
     baseline_source: FeatureSource = Field(
-        default="raw_value",
+        default=DEFAULT_BASELINE_SOURCE,
+    )
+
+    baseline_anchor_statuses: set[int] = Field(
+        default_factory=lambda: set(DEFAULT_BASELINE_ANCHOR_STATUSES),
+    )
+
+    baseline_anchor_window_each_side_points: int = Field(
+        default=DEFAULT_BASELINE_ANCHOR_WINDOW_EACH_SIDE_POINTS,
+        ge=0,
+        description=(
+            "Neighbouring points on each side used for the baseline's robust "
+            "local anchor median."
+        ),
     )
 
     time_cyclic_features: list[TimeCyclicFeature] = Field(
@@ -394,8 +462,12 @@ class IsolationForestDefaultFeatureProfileConfig(_DefaultProfileBase):
                 "type": "residual",
                 "source": self.residual_source,
                 "baseline": {
-                    "method": "weighted_seasonal",
+                    "method": DEFAULT_BASELINE_METHOD,
                     "source": self.baseline_source,
+                    "anchor_statuses": set(self.baseline_anchor_statuses),
+                    "anchor_window_each_side_points": (
+                        self.baseline_anchor_window_each_side_points
+                    ),
                 },
             },
             {
@@ -412,6 +484,9 @@ class IsolationForestDefaultFeatureProfileConfig(_DefaultProfileBase):
                     "type": "lag",
                     "lags": [points_per_day],
                     "source": self.lag_source,
+                    "point_cleaning": {
+                        "enabled": self.lag_point_cleaning_enabled,
+                    },
                 }
             )
 
@@ -489,4 +564,8 @@ __all__ = [
     "DefaultFeatureProfilesConfig",
     "IsolationForestDefaultFeatureProfileConfig",
     "XGBoostDefaultFeatureProfileConfig",
+] + [
+    name
+    for name in globals()
+    if name.startswith("DEFAULT_")
 ]
