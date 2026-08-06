@@ -17,7 +17,13 @@ from __future__ import annotations
 
 from typing import Any, Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 
 FeatureSource: TypeAlias = Literal[
@@ -65,15 +71,15 @@ DEFAULT_CORRECTED_HISTORY_WINDOW_MINUTES: Final = 60
 DEFAULT_CORRECTED_HISTORY_MINIMUM_PERIODS: Final = 1
 DEFAULT_CORRECTED_HISTORY_FORWARD_FILL_REMAINING: Final = True
 
-# Local point cleaning is opt-in. The algorithm defaults already use the
-# globally corrected history for lag/comparison features, while the seasonal
-# baseline performs its own robust local-anchor median.
+# Local point cleaning is opt-in and is supported only with raw_value.
+# corrected_history is already a separate cleaning method and cannot be
+# combined with local median cleaning.
 DEFAULT_LOCAL_MEDIAN_ENABLED: Final = False
 DEFAULT_LOCAL_MEDIAN_BAD_STATUSES: Final = frozenset({2})
 DEFAULT_LOCAL_MEDIAN_ACCEPTED_STATUSES: Final = frozenset({1, 3, 4})
 DEFAULT_LOCAL_MEDIAN_HALF_WINDOW_MINUTES: Final = 720
 DEFAULT_LOCAL_MEDIAN_MINIMUM_VALID_POINTS: Final = 1
-DEFAULT_LOCAL_MEDIAN_UNAVAILABLE_STRATEGY: Final = "auto"
+DEFAULT_LOCAL_MEDIAN_UNAVAILABLE_STRATEGY: Final = "nan"
 
 DEFAULT_BASELINE_METHOD: Final = "weighted_seasonal"
 DEFAULT_BASELINE_SOURCE: Final = "raw_value"
@@ -272,6 +278,24 @@ class XGBoostDefaultFeatureProfileConfig(_DefaultProfileBase):
             field_name="rolling_window_minutes",
         )
 
+    @model_validator(mode="after")
+    def validate_lag_source_cleaning_combination(
+        self,
+    ) -> XGBoostDefaultFeatureProfileConfig:
+        """Reject the deleted corrected-history plus local-median method."""
+
+        if (
+            self.lag_source == "corrected_history"
+            and self.lag_point_cleaning_enabled
+        ):
+            raise ValueError(
+                "lag_point_cleaning_enabled=True is supported only when "
+                "lag_source='raw_value'. corrected_history and local median "
+                "cleaning are separate methods and cannot be combined."
+            )
+
+        return self
+
     def build_request_payloads(
         self,
         *,
@@ -339,11 +363,7 @@ class XGBoostDefaultFeatureProfileConfig(_DefaultProfileBase):
 
 class IsolationForestDefaultFeatureProfileConfig(_DefaultProfileBase):
     """Default features mirroring the earlier Isolation Forest script."""
-
-    current_value_source: FeatureSource = Field(
-        default="raw_value",
-    )
-
+    
     lag_source: FeatureSource = Field(
         default="corrected_history",
     )
@@ -436,6 +456,35 @@ class IsolationForestDefaultFeatureProfileConfig(_DefaultProfileBase):
             field_name="time_cyclic_features",
         )
 
+    @model_validator(mode="after")
+    def validate_source_cleaning_combinations(
+        self,
+    ) -> IsolationForestDefaultFeatureProfileConfig:
+        """Reject deleted corrected-history plus local-median combinations."""
+
+        if (
+            self.lag_source == "corrected_history"
+            and self.lag_point_cleaning_enabled
+        ):
+            raise ValueError(
+                "lag_point_cleaning_enabled=True is supported only when "
+                "lag_source='raw_value'. corrected_history and local median "
+                "cleaning are separate methods and cannot be combined."
+            )
+
+        if (
+            self.baseline_source == "corrected_history"
+            and self.baseline_anchor_window_each_side_points > 0
+        ):
+            raise ValueError(
+                "baseline_anchor_window_each_side_points must be 0 when "
+                "baseline_source='corrected_history'. A positive anchor "
+                "window applies local median cleaning, which cannot be "
+                "combined with corrected_history."
+            )
+
+        return self
+
     def build_request_payloads(
         self,
         *,
@@ -456,7 +505,6 @@ class IsolationForestDefaultFeatureProfileConfig(_DefaultProfileBase):
         payloads: list[dict[str, Any]] = [
             {
                 "type": "current_value",
-                "source": self.current_value_source,
             },
             {
                 "type": "residual",

@@ -1,6 +1,11 @@
 """
 Request schemas for Part C telecom feature engineering.
 
+Revision label: points window fixed.
+
+This revision aligns schema history calculations and validation with the
+adaptive leakage-safe local-median windows used by lag features.
+
 Intended project location::
 
     app/schemas/feature_engineering/feature_engineering.py
@@ -228,7 +233,9 @@ class LocalMedianCleaningConfig(BaseModel):
     When enabled, a feature module may replace a referenced value whose status
     belongs to ``bad_statuses`` with the median of nearby values whose statuses
     belong to ``accepted_statuses``. This is separate from selecting raw values
-    or the shared corrected-history series.
+    or the shared corrected-history series. Local median cleaning is
+    supported only for ``raw_value`` references; it cannot be layered on
+    top of ``corrected_history``.
     """
 
     model_config = ConfigDict(
@@ -267,8 +274,9 @@ class LocalMedianCleaningConfig(BaseModel):
         default=DEFAULT_LOCAL_MEDIAN_HALF_WINDOW_MINUTES,
         gt=0,
         description=(
-            "Minutes searched on each side of the referenced point. The "
-            "default mirrors the previous plus/minus 12-hour lag cleaning."
+            "Nominal minutes searched on each side of the referenced point. "
+            "Leakage-sensitive feature modules may truncate the right side "
+            "while retaining the configured left-side history."
         ),
     )
 
@@ -276,8 +284,9 @@ class LocalMedianCleaningConfig(BaseModel):
         default=None,
         gt=0,
         description=(
-            "Optional exact half-window in data points. Supply this instead "
-            "of half_window_minutes when point-based control is preferred."
+            "Optional nominal half-window in data points. Supply this "
+            "instead of half_window_minutes. Leakage-sensitive feature "
+            "modules may use fewer right-side points when required."
         ),
     )
 
@@ -291,15 +300,14 @@ class LocalMedianCleaningConfig(BaseModel):
     )
 
     unavailable_strategy: Literal[
-        "auto",
         "nan",
         "keep_source",
     ] = Field(
         default=DEFAULT_LOCAL_MEDIAN_UNAVAILABLE_STRATEGY,
         description=(
-            "Fallback when the local median lacks enough valid points. "
-            "auto keeps a finite corrected_history value but returns NaN for "
-            "an unacceptable raw_value reference."
+            "Fallback when the local median lacks enough valid raw points. "
+            "nan leaves the referenced value unavailable; keep_source retains "
+            "a finite raw source value."
         ),
     )
 
@@ -553,6 +561,24 @@ class LagFeatureRequest(FeatureRequestBase):
             field_name="lags",
         )
 
+    @model_validator(mode="after")
+    def validate_source_cleaning_combination(
+        self,
+    ) -> LagFeatureRequest:
+        """Reject corrected_history combined with local median cleaning."""
+
+        if (
+            self.source == "corrected_history"
+            and self.point_cleaning.enabled
+        ):
+            raise ValueError(
+                "point_cleaning.enabled=True is supported only when "
+                "source='raw_value'. corrected_history and local median "
+                "cleaning are separate methods and cannot be combined."
+            )
+
+        return self
+
 
 class RollingFeatureRequest(FeatureRequestBase):
     """Request rolling statistical features over previous observations."""
@@ -758,6 +784,24 @@ class LagComparisonFeatureRequestBase(FeatureRequestBase):
             values,
             field_name="lags",
         )
+
+    @model_validator(mode="after")
+    def validate_source_cleaning_combination(
+        self,
+    ) -> LagComparisonFeatureRequestBase:
+        """Reject corrected_history combined with local median cleaning."""
+
+        if (
+            self.source == "corrected_history"
+            and self.point_cleaning.enabled
+        ):
+            raise ValueError(
+                "point_cleaning.enabled=True is supported only when "
+                "source='raw_value'. corrected_history and local median "
+                "cleaning are separate methods and cannot be combined."
+            )
+
+        return self
 
 
 class DifferenceFeatureRequest(LagComparisonFeatureRequestBase):
@@ -1015,7 +1059,8 @@ class WeightedSeasonalBaselineConfig(BaseModel):
         ge=0,
         description=(
             "Number of neighbouring points on each side used to form a robust "
-            "local median around every historical anchor."
+            "local median around every historical anchor. A positive value is "
+            "supported only when baseline source='raw_value'."
         ),
     )
 
@@ -1055,6 +1100,17 @@ class WeightedSeasonalBaselineConfig(BaseModel):
         if not self.anchor_statuses:
             raise ValueError(
                 "anchor_statuses cannot be empty."
+            )
+
+        if (
+            self.source == "corrected_history"
+            and self.anchor_window_each_side_points > 0
+        ):
+            raise ValueError(
+                "anchor_window_each_side_points must be 0 when "
+                "source='corrected_history'. A positive anchor window applies "
+                "local median cleaning, which cannot be combined with "
+                "corrected_history."
             )
 
         if not isclose(
@@ -1155,6 +1211,104 @@ FeatureRequest: TypeAlias = Annotated[
 _FEATURE_REQUEST_ADAPTER = TypeAdapter(FeatureRequest)
 
 
+# Feature families that may intentionally be requested more than once.
+# Repeated canonical output names from these request types are renamed with
+# deterministic _s2, _s3, ... suffixes during bucket resolution.
+_REPEATABLE_FEATURE_REQUEST_TYPES = (
+    LagFeatureRequest,
+    RollingFeatureRequest,
+    DifferenceFeatureRequest,
+    PercentageChangeFeatureRequest,
+    SeasonalDifferenceFeatureRequest,
+    RollingZScoreFeatureRequest,
+    EWMAFeatureRequest,
+    RollingSlopeFeatureRequest,
+)
+
+
+def _is_repeatable_feature_request(
+    request: FeatureRequest,
+) -> bool:
+    """Return whether one request type may intentionally repeat outputs."""
+
+    return isinstance(
+        request,
+        _REPEATABLE_FEATURE_REQUEST_TYPES,
+    )
+
+
+def _resolve_feature_column_groups(
+    features: list[FeatureRequest],
+) -> tuple[tuple[str, ...], tuple[tuple[str, ...], ...]]:
+    """Resolve globally unique output names while preserving request identity.
+
+    The first occurrence of a canonical feature keeps its normal schema name.
+    Later occurrences of the same canonical output are allowed only when both
+    requests belong to the same explicitly repeatable feature family. They are
+    renamed deterministically using ``_s2``, ``_s3``, and so on.
+
+    Returns:
+        tuple:
+            A flattened tuple of all resolved feature columns followed by one
+            resolved output-column tuple per request, in request order.
+
+    Raises:
+        ValueError:
+            If a non-repeatable output collides, or if two different request
+            families attempt to own the same canonical output name.
+    """
+
+    occurrence_count: dict[str, int] = {}
+    first_owner_type: dict[str, str] = {}
+    first_owner_repeatable: dict[str, bool] = {}
+    resolved_columns: list[str] = []
+    resolved_groups: list[tuple[str, ...]] = []
+
+    for request in features:
+        request_type = str(
+            getattr(request, "type", type(request).__name__)
+        )
+        request_repeatable = _is_repeatable_feature_request(request)
+        request_columns: list[str] = []
+
+        for canonical_column in get_feature_columns(request):
+            count = occurrence_count.get(canonical_column, 0) + 1
+
+            if count == 1:
+                resolved_name = canonical_column
+                first_owner_type[canonical_column] = request_type
+                first_owner_repeatable[canonical_column] = request_repeatable
+            else:
+                original_type = first_owner_type[canonical_column]
+                original_repeatable = first_owner_repeatable[canonical_column]
+
+                if (
+                    not request_repeatable
+                    or not original_repeatable
+                    or request_type != original_type
+                ):
+                    raise ValueError(
+                        "Requested features create a disallowed output "
+                        f"collision for '{canonical_column}'. Repetition is "
+                        "supported only within explicitly repeatable feature "
+                        "families of the same type."
+                    )
+
+                resolved_name = f"{canonical_column}_s{count}"
+
+            occurrence_count[canonical_column] = count
+            request_columns.append(resolved_name)
+            resolved_columns.append(resolved_name)
+
+        resolved_groups.append(tuple(request_columns))
+
+    if len(resolved_columns) != len(set(resolved_columns)):
+        raise ValueError(
+            "Resolved feature naming unexpectedly produced duplicate output "
+            "columns."
+        )
+
+    return tuple(resolved_columns), tuple(resolved_groups)
 
 
 # ---------------------------------------------------------------------------
@@ -1196,6 +1350,51 @@ class ResolvedFeatureEngineeringConfig(BaseModel):
     feature_columns: tuple[str, ...] = Field(
         min_length=1,
     )
+
+    feature_column_groups: tuple[tuple[str, ...], ...] = Field(
+        min_length=1,
+        description=(
+            "Resolved output names for each request in features, preserving "
+            "request order. Repeated allowed outputs use _s2, _s3, and so on."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_feature_column_groups(
+        self,
+    ) -> ResolvedFeatureEngineeringConfig:
+        """Require one resolved output-name group per feature request."""
+
+        if len(self.feature_column_groups) != len(self.features):
+            raise ValueError(
+                "feature_column_groups must contain exactly one entry for "
+                "every resolved feature request."
+            )
+
+        flattened = tuple(
+            column
+            for group in self.feature_column_groups
+            for column in group
+        )
+
+        if flattened != self.feature_columns:
+            raise ValueError(
+                "Flattened feature_column_groups must exactly match "
+                "feature_columns in request order."
+            )
+
+        for request, group in zip(
+            self.features,
+            self.feature_column_groups,
+            strict=True,
+        ):
+            if len(group) != len(get_feature_columns(request)):
+                raise ValueError(
+                    "Each feature_column_groups entry must contain the same "
+                    "number of columns produced by its feature request."
+                )
+
+        return self
 
     minimum_history_points: int = Field(
         gt=0,
@@ -1341,8 +1540,11 @@ def get_request_history_requirements(
 
     if isinstance(request, EWMAFeatureRequest):
         maximum_span = max(request.spans)
-        return maximum_span, maximum_span
 
+        # One previous observation is required because EWMA uses source.shift(1).
+        # Therefore, the earliest possible usable output is the second row.
+        return 2, maximum_span
+    
     if isinstance(request, BaselineFeatureRequest):
         baseline = request.baseline
 
@@ -1430,7 +1632,12 @@ class FeatureEngineeringConfig(BaseModel):
     def validate_custom_features(
         self,
     ) -> FeatureEngineeringConfig:
-        """Reject empty custom requests and deterministic output collisions."""
+        """Reject empty requests and disallowed output collisions.
+
+        Selected lag/comparison/rolling feature families may intentionally
+        repeat. Their final ``_s2``/``_s3`` names are resolved later, after the
+        dataset bucket is known. Non-repeatable collisions remain invalid.
+        """
 
         if self.features is None:
             return self
@@ -1441,25 +1648,11 @@ class FeatureEngineeringConfig(BaseModel):
                 "default profile."
             )
 
-        columns: list[str] = []
-
-        for request in self.features:
-            columns.extend(
-                get_feature_columns(request)
-            )
-
-        duplicates = sorted({
-            column
-            for column in columns
-            if columns.count(column) > 1
-        })
-
-        if duplicates:
-            raise ValueError(
-                "Requested features would create duplicate output columns: "
-                f"{duplicates}. A residual request already creates baseline "
-                "and residual, so do not request the same baseline separately."
-            )
+        # Run the same deterministic naming policy used during resolution so
+        # invalid collisions fail immediately during request validation.
+        _resolve_feature_column_groups(
+            list(self.features)
+        )
 
         return self
 
@@ -1499,7 +1692,11 @@ class FeatureEngineeringConfig(BaseModel):
                 "Feature resolution produced no requested features."
             )
 
-        feature_columns: list[str] = []
+        feature_columns, feature_column_groups = (
+            _resolve_feature_column_groups(
+                effective_features
+            )
+        )
         minimum_history_points = 1
         maximum_lookback_points = 0
         uses_corrected_history = False
@@ -1507,13 +1704,6 @@ class FeatureEngineeringConfig(BaseModel):
         requires_status_column = False
 
         for request in effective_features:
-            request_columns = get_feature_columns(
-                request
-            )
-            feature_columns.extend(
-                request_columns
-            )
-
             request_minimum, request_lookback = (
                 get_request_history_requirements(
                     request,
@@ -1565,11 +1755,63 @@ class FeatureEngineeringConfig(BaseModel):
                         bucket_minutes=bucket_minutes,
                     )
                 )
+
+                request_lags = getattr(
+                    request,
+                    "lags",
+                    None,
+                )
+
+                if not request_lags:
+                    raise TypeError(
+                        "Local median point cleaning is supported only for "
+                        "lag-based feature requests that define positive "
+                        "lags."
+                    )
+
+                # Lag and comparison modules use an adaptive leakage-safe
+                # window. For lag L and nominal half-window h, the full left
+                # side is retained while the right side is capped so that the
+                # current feature row can never enter the median:
+                #
+                #     safe_right = min(h, L - 1)
+                #
+                # Validate every requested lag because small lags can expose
+                # fewer candidate positions than the nominal 2h + 1 window.
+                for lag in request_lags:
+                    safe_right_points = min(
+                        half_window_points,
+                        lag - 1,
+                    )
+                    available_window_points = (
+                        half_window_points
+                        + safe_right_points
+                        + 1
+                    )
+
+                    if (
+                        point_cleaning.minimum_valid_points
+                        > available_window_points
+                    ):
+                        raise ValueError(
+                            "point_cleaning.minimum_valid_points cannot be "
+                            f"satisfied for lag={lag}. The leakage-safe local "
+                            "window contains at most "
+                            f"{available_window_points} positions: "
+                            f"{half_window_points} on the left, the referenced "
+                            f"point, and {safe_right_points} on the right."
+                        )
+
                 uses_local_median_cleaning = True
                 requires_status_column = True
+
+                # The earliest observation required for any requested lag is
+                # t - maximum_lag - h. The adaptive right side contains newer
+                # historical observations and therefore does not increase the
+                # maximum lookback.
                 minimum_history_points = max(
                     minimum_history_points,
-                    2 * half_window_points + 1,
+                    request_lookback + half_window_points + 1,
                 )
                 maximum_lookback_points = max(
                     maximum_lookback_points,
@@ -1605,18 +1847,6 @@ class FeatureEngineeringConfig(BaseModel):
                 corrected_history_window_points,
             )
 
-        duplicates = sorted({
-            column
-            for column in feature_columns
-            if feature_columns.count(column) > 1
-        })
-
-        if duplicates:
-            raise ValueError(
-                "Resolved features create duplicate output columns: "
-                f"{duplicates}."
-            )
-
         return ResolvedFeatureEngineeringConfig(
             bucket_minutes=bucket_minutes,
             points_per_day=points_per_day,
@@ -1625,7 +1855,8 @@ class FeatureEngineeringConfig(BaseModel):
                 corrected_history_window_points
             ),
             features=tuple(effective_features),
-            feature_columns=tuple(feature_columns),
+            feature_columns=feature_columns,
+            feature_column_groups=feature_column_groups,
             minimum_history_points=minimum_history_points,
             maximum_lookback_points=maximum_lookback_points,
             uses_corrected_history=uses_corrected_history,
