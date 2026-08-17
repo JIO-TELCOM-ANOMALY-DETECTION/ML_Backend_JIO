@@ -127,6 +127,78 @@ DEFAULT_ISOLATION_FOREST_HYPERPARAMETER_CANDIDATES: Final = (
     },
 )
 
+# ---------------------------------------------------------------------------
+# Default Optuna hyperparameter search space
+# ---------------------------------------------------------------------------
+
+# Used when:
+#
+#     hyperparameter_tuning_enabled = True
+#     hyperparameter_tuning_method = "optuna"
+#
+# and the user does not provide ``optuna_search_space``.
+#
+# Every configurable Isolation Forest hyperparameter is represented here.
+#
+# Numeric parameters use integer/float ranges.
+# Parameters that naturally support mixed or discrete values use categorical
+# choices.
+#
+# Contamination is intentionally kept fixed at 1% by default. Without labelled
+# anomalies, automatically optimizing contamination across a broad range is
+# less reliable. Users may still explicitly provide their own Optuna search
+# space with a different contamination range or categorical values.
+
+DEFAULT_ISOLATION_FOREST_OPTUNA_SEARCH_SPACE: Final = {
+    "n_estimators": {
+        "type": "int",
+        "low": 100,
+        "high": 500,
+        "log": False,
+    },
+    "max_samples": {
+        "type": "categorical",
+        "choices": (
+            "auto",
+            0.70,
+            0.80,
+            0.90,
+            1.00,
+        ),
+    },
+    "contamination": {
+        "type": "categorical",
+        "choices": (
+            0.01,
+        ),
+    },
+    "max_features": {
+        "type": "float",
+        "low": 0.50,
+        "high": 1.00,
+        "log": False,
+    },
+    "bootstrap": {
+        "type": "categorical",
+        "choices": (
+            False,
+            True,
+        ),
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Default Optuna controls
+# ---------------------------------------------------------------------------
+
+# Number of Optuna trials performed for each independently trained site series
+# unless explicitly overridden by the request.
+DEFAULT_ISOLATION_FOREST_OPTUNA_N_TRIALS: Final = 50
+
+# Fixed sampler seed keeps equivalent Optuna searches reproducible.
+DEFAULT_ISOLATION_FOREST_OPTUNA_SAMPLER_SEED: Final = 42
+
 
 # ---------------------------------------------------------------------------
 # Hyperparameter tuning controls

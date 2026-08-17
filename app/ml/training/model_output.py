@@ -695,6 +695,7 @@ def _build_metadata(
     *,
     validation_result: TrainingValidationResult,
     split_plan: TrainingSplitPlan,
+    training_config: TrainingConfig,
     series_artifacts: tuple[SeriesModelArtifact, ...],
     user_metadata: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
@@ -733,6 +734,23 @@ def _build_metadata(
             "joblib"
         )
 
+    tuning_enabled = bool(
+        training_config.hyperparameter_tuning_enabled
+    )
+
+    tuning_method = (
+        training_config.hyperparameter_tuning_method
+        if tuning_enabled
+        else None
+    )
+
+    if tuning_method == "optuna":
+        library_versions[
+            "optuna"
+        ] = _package_version(
+            "optuna"
+        )
+
     metadata: dict[str, Any] = {
         "model_type": (
             model_type
@@ -762,7 +780,10 @@ def _build_metadata(
             validation_result.target_column
         ),
         "hyperparameter_tuning_enabled": (
-            split_plan.hyperparameter_tuning_enabled
+            tuning_enabled
+        ),
+        "hyperparameter_tuning_method": (
+            tuning_method
         ),
         "series_models": {
             artifact.series_key: {
@@ -940,6 +961,7 @@ def finalize_model_output(
         _build_metadata(
             validation_result=validation_result,
             split_plan=split_plan,
+            training_config=training_config,
             series_artifacts=series_artifacts,
             user_metadata=metadata,
         ),

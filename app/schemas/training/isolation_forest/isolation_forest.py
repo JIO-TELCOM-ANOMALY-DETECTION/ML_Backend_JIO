@@ -7,10 +7,12 @@ Intended project location::
 
 This module defines:
 
-- the Isolation Forest hyperparameter input contract;
-- the same four hyperparameter modes used by XGBoost;
+- the Isolation Forest fixed hyperparameter input contract;
+- the Isolation Forest Optuna search-space input contract;
+- direct, fixed-tuning, and Optuna-tuning hyperparameter modes;
 - Isolation Forest-specific chronological split configuration;
-- tuning controls;
+- shared tuning controls;
+- Optuna-specific tuning controls;
 - model-specific dataset-validation rules; and
 - resolution of user-provided or default settings.
 
@@ -30,8 +32,9 @@ Actual default values belong to::
     app/schemas/training/isolation_forest/defaults.py
 
 This module does not load datasets, split dataframes, train Isolation Forest,
-perform hyperparameter tuning, calculate anomaly scores, apply directional
-anomaly rules, test models, or save outputs.
+perform fixed hyperparameter tuning, perform Optuna optimization,
+calculate anomaly scores, apply directional anomaly rules, test models,
+or save outputs.
 """
 
 from __future__ import annotations
@@ -59,18 +62,25 @@ from .defaults import (
     DEFAULT_ISOLATION_FOREST_MINIMUM_TEST_POINTS,
     DEFAULT_ISOLATION_FOREST_MINIMUM_TRAIN_POINTS,
     DEFAULT_ISOLATION_FOREST_MINIMUM_VALIDATION_POINTS,
+    DEFAULT_ISOLATION_FOREST_OPTUNA_N_TRIALS,
+    DEFAULT_ISOLATION_FOREST_OPTUNA_SAMPLER_SEED,
+    DEFAULT_ISOLATION_FOREST_OPTUNA_SEARCH_SPACE,
     DEFAULT_ISOLATION_FOREST_REQUIRE_ALL_RESOLVED_FEATURES,
     DEFAULT_ISOLATION_FOREST_REQUIRE_COMPLETE_FEATURE_ROWS,
-    DEFAULT_ISOLATION_FOREST_USE_ONLY_RESOLVED_FEATURE_COLUMNS,
     DEFAULT_ISOLATION_FOREST_SELECTION_METRIC,
     DEFAULT_ISOLATION_FOREST_TRUSTED_TRAIN_STATUSES,
     DEFAULT_ISOLATION_FOREST_TUNING_TEST_PERCENTAGE,
     DEFAULT_ISOLATION_FOREST_TUNING_TRAIN_PERCENTAGE,
     DEFAULT_ISOLATION_FOREST_TUNING_VALIDATION_PERCENTAGE,
+    DEFAULT_ISOLATION_FOREST_USE_ONLY_RESOLVED_FEATURE_COLUMNS,
     ISOLATION_FOREST_ALLOWED_SELECTION_METRICS,
     ISOLATION_FOREST_HYPERPARAMETER_RULES,
 )
 
+
+# ---------------------------------------------------------------------------
+# Fixed/direct hyperparameter contracts
+# ---------------------------------------------------------------------------
 
 IsolationForestHyperparameterValue: TypeAlias = (
     str
@@ -106,7 +116,16 @@ def _validate_parameter_value(
     rule_type = rule["type"]
 
     if rule_type == "int":
-        if isinstance(value, bool) or not isinstance(value, int):
+        if (
+            isinstance(
+                value,
+                bool,
+            )
+            or not isinstance(
+                value,
+                int,
+            )
+        ):
             raise ValueError(
                 f"{field_name}.{parameter_name} must be an integer."
             )
@@ -119,7 +138,10 @@ def _validate_parameter_value(
         return
 
     if rule_type == "bool":
-        if not isinstance(value, bool):
+        if not isinstance(
+            value,
+            bool,
+        ):
             raise ValueError(
                 f"{field_name}.{parameter_name} must be a boolean."
             )
@@ -127,32 +149,47 @@ def _validate_parameter_value(
         return
 
     if rule_type == "max_samples":
-        if isinstance(value, bool):
+        if isinstance(
+            value,
+            bool,
+        ):
             raise ValueError(
                 f"{field_name}.{parameter_name} cannot be boolean."
             )
 
-        if isinstance(value, str):
+        if isinstance(
+            value,
+            str,
+        ):
             if value != "auto":
                 raise ValueError(
                     f"{field_name}.{parameter_name} accepts only 'auto', "
                     "a positive integer, or a float in (0, 1]."
                 )
+
             return
 
-        if isinstance(value, int):
+        if isinstance(
+            value,
+            int,
+        ):
             if value <= 0:
                 raise ValueError(
                     f"{field_name}.{parameter_name} must be greater than zero."
                 )
+
             return
 
-        if isinstance(value, float):
+        if isinstance(
+            value,
+            float,
+        ):
             if not 0.0 < value <= 1.0:
                 raise ValueError(
                     f"{field_name}.{parameter_name} as a float must lie "
                     "in (0, 1]."
                 )
+
             return
 
         raise ValueError(
@@ -161,26 +198,42 @@ def _validate_parameter_value(
         )
 
     if rule_type == "contamination":
-        if isinstance(value, bool):
+        if isinstance(
+            value,
+            bool,
+        ):
             raise ValueError(
                 f"{field_name}.{parameter_name} cannot be boolean."
             )
 
-        if isinstance(value, str):
+        if isinstance(
+            value,
+            str,
+        ):
             if value != "auto":
                 raise ValueError(
                     f"{field_name}.{parameter_name} accepts only 'auto' "
                     "or a float in (0, 0.5]."
                 )
+
             return
 
-        if isinstance(value, (int, float)):
-            numeric_value = float(value)
+        if isinstance(
+            value,
+            (
+                int,
+                float,
+            ),
+        ):
+            numeric_value = float(
+                value
+            )
 
             if not 0.0 < numeric_value <= 0.5:
                 raise ValueError(
                     f"{field_name}.{parameter_name} must lie in (0, 0.5]."
                 )
+
             return
 
         raise ValueError(
@@ -189,24 +242,35 @@ def _validate_parameter_value(
         )
 
     if rule_type == "max_features":
-        if isinstance(value, bool):
+        if isinstance(
+            value,
+            bool,
+        ):
             raise ValueError(
                 f"{field_name}.{parameter_name} cannot be boolean."
             )
 
-        if isinstance(value, int):
+        if isinstance(
+            value,
+            int,
+        ):
             if value <= 0:
                 raise ValueError(
                     f"{field_name}.{parameter_name} must be greater than zero."
                 )
+
             return
 
-        if isinstance(value, float):
+        if isinstance(
+            value,
+            float,
+        ):
             if not 0.0 < value <= 1.0:
                 raise ValueError(
                     f"{field_name}.{parameter_name} as a float must lie "
                     "in (0, 1]."
                 )
+
             return
 
         raise ValueError(
@@ -229,8 +293,7 @@ def _validate_complete_hyperparameter_set(
     Validate one complete user-configurable Isolation Forest parameter set.
 
     The keys of DEFAULT_ISOLATION_FOREST_HYPERPARAMETERS define the complete
-    configurable contract. Adding or removing a configurable parameter
-    therefore requires changes only in defaults.py.
+    configurable contract.
     """
 
     if not parameters:
@@ -275,7 +338,482 @@ def _validate_complete_hyperparameter_set(
             field_name=field_name,
         )
 
-    return dict(parameters)
+    return dict(
+        parameters
+    )
+
+
+# ---------------------------------------------------------------------------
+# Optuna search-space contracts
+# ---------------------------------------------------------------------------
+
+IsolationForestOptunaParameterType = Literal[
+    "int",
+    "float",
+    "categorical",
+]
+
+
+class IsolationForestOptunaParameterConfig(BaseModel):
+    """
+    Define one Isolation Forest Optuna hyperparameter search specification.
+
+    ``type='int'``:
+        use low/high as integer boundaries.
+
+    ``type='float'``:
+        use low/high as floating-point boundaries.
+
+    ``type='categorical'``:
+        use explicit choices.
+
+    Categorical search is required for settings such as ``bootstrap`` and
+    parameters that may accept the string ``'auto'``.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+    )
+
+    type: IsolationForestOptunaParameterType
+
+    low: int | float | None = Field(
+        default=None,
+    )
+
+    high: int | float | None = Field(
+        default=None,
+    )
+
+    log: bool = Field(
+        default=False,
+    )
+
+    choices: tuple[
+        IsolationForestHyperparameterValue,
+        ...,
+    ] | None = Field(
+        default=None,
+        min_length=1,
+    )
+
+    @field_validator(
+        "choices",
+        mode="before",
+    )
+    @classmethod
+    def normalize_choices(
+        cls,
+        value,
+    ):
+        """
+        Convert JSON arrays to tuples before strict Pydantic validation.
+
+        FastAPI parses JSON arrays as Python lists, while this schema keeps
+        categorical choices internally as an immutable tuple.
+        """
+
+        if isinstance(
+            value,
+            list,
+        ):
+            return tuple(
+                value
+            )
+
+        return value
+
+    @model_validator(
+        mode="after"
+    )
+    def validate_search_definition(
+        self,
+    ) -> IsolationForestOptunaParameterConfig:
+        """Validate range-vs-categorical structure."""
+
+        if self.type == "categorical":
+            if self.choices is None:
+                raise ValueError(
+                    "Categorical Optuna parameters require choices."
+                )
+
+            if (
+                self.low is not None
+                or self.high is not None
+            ):
+                raise ValueError(
+                    "Categorical Optuna parameters cannot define low/high."
+                )
+
+            if self.log:
+                raise ValueError(
+                    "Categorical Optuna parameters cannot use log=True."
+                )
+
+            return self
+
+        # int / float range
+        if (
+            self.low is None
+            or self.high is None
+        ):
+            raise ValueError(
+                f"Optuna parameter type='{self.type}' requires low and high."
+            )
+
+        if self.choices is not None:
+            raise ValueError(
+                f"Optuna parameter type='{self.type}' cannot define choices."
+            )
+
+        if self.type == "int":
+            if (
+                isinstance(
+                    self.low,
+                    bool,
+                )
+                or not isinstance(
+                    self.low,
+                    int,
+                )
+            ):
+                raise ValueError(
+                    "Integer Optuna parameter low must be an integer."
+                )
+
+            if (
+                isinstance(
+                    self.high,
+                    bool,
+                )
+                or not isinstance(
+                    self.high,
+                    int,
+                )
+            ):
+                raise ValueError(
+                    "Integer Optuna parameter high must be an integer."
+                )
+
+        if self.type == "float":
+            if (
+                isinstance(
+                    self.low,
+                    bool,
+                )
+                or not isinstance(
+                    self.low,
+                    (
+                        int,
+                        float,
+                    ),
+                )
+            ):
+                raise ValueError(
+                    "Float Optuna parameter low must be numeric."
+                )
+
+            if (
+                isinstance(
+                    self.high,
+                    bool,
+                )
+                or not isinstance(
+                    self.high,
+                    (
+                        int,
+                        float,
+                    ),
+                )
+            ):
+                raise ValueError(
+                    "Float Optuna parameter high must be numeric."
+                )
+
+        if float(
+            self.low
+        ) >= float(
+            self.high
+        ):
+            raise ValueError(
+                "Optuna parameter requires low < high."
+            )
+
+        if (
+            self.log
+            and float(
+                self.low
+            ) <= 0.0
+        ):
+            raise ValueError(
+                "Optuna logarithmic search requires low > 0."
+            )
+
+        return self
+
+
+IsolationForestOptunaSearchSpace: TypeAlias = dict[
+    str,
+    IsolationForestOptunaParameterConfig,
+]
+
+
+def _validate_optuna_parameter_config(
+    *,
+    parameter_name: str,
+    parameter_config: IsolationForestOptunaParameterConfig,
+    field_name: str,
+) -> IsolationForestOptunaParameterConfig:
+    """
+    Validate one Optuna search definition against the Isolation Forest
+    hyperparameter contract.
+    """
+
+    rule = ISOLATION_FOREST_HYPERPARAMETER_RULES.get(
+        parameter_name
+    )
+
+    if rule is None:
+        raise ValueError(
+            f"{field_name} contains unsupported Isolation Forest "
+            f"hyperparameter '{parameter_name}'."
+        )
+
+    rule_type = rule[
+        "type"
+    ]
+
+    # ------------------------------------------------------------------
+    # Categorical parameters
+    # ------------------------------------------------------------------
+
+    if parameter_config.type == "categorical":
+        choices = parameter_config.choices
+
+        if choices is None:
+            raise ValueError(
+                f"{field_name}.{parameter_name} requires categorical choices."
+            )
+
+        for index, choice in enumerate(
+            choices
+        ):
+            _validate_parameter_value(
+                parameter_name=parameter_name,
+                value=choice,
+                field_name=(
+                    f"{field_name}.{parameter_name}.choices[{index}]"
+                ),
+            )
+
+        return parameter_config
+
+    # ------------------------------------------------------------------
+    # Numeric ranges
+    # ------------------------------------------------------------------
+
+    low = parameter_config.low
+    high = parameter_config.high
+
+    if (
+        low is None
+        or high is None
+    ):
+        raise ValueError(
+            f"{field_name}.{parameter_name} requires low/high boundaries."
+        )
+
+    # Fixed integer-only parameter.
+    if rule_type == "int":
+        if parameter_config.type != "int":
+            raise ValueError(
+                f"{field_name}.{parameter_name} must use type='int' "
+                "or type='categorical'."
+            )
+
+    # Boolean has no numeric range.
+    elif rule_type == "bool":
+        raise ValueError(
+            f"{field_name}.{parameter_name} must use type='categorical'."
+        )
+
+    # max_samples supports integer counts or fractional floats.
+    elif rule_type == "max_samples":
+        if parameter_config.type not in {
+            "int",
+            "float",
+        }:
+            raise ValueError(
+                f"{field_name}.{parameter_name} must use type='int', "
+                "type='float', or type='categorical'."
+            )
+
+    # contamination is naturally searched as a float.
+    elif rule_type == "contamination":
+        if parameter_config.type != "float":
+            raise ValueError(
+                f"{field_name}.{parameter_name} must use type='float' "
+                "or type='categorical'."
+            )
+
+    # max_features supports positive integer counts or fractional floats.
+    elif rule_type == "max_features":
+        if parameter_config.type not in {
+            "int",
+            "float",
+        }:
+            raise ValueError(
+                f"{field_name}.{parameter_name} must use type='int', "
+                "type='float', or type='categorical'."
+            )
+
+    else:
+        raise ValueError(
+            f"Unsupported Isolation Forest Optuna rule type '{rule_type}' "
+            f"for parameter '{parameter_name}'."
+        )
+
+    # Reuse the existing model-specific parameter rules to validate both
+    # boundaries.
+    _validate_parameter_value(
+        parameter_name=parameter_name,
+        value=low,
+        field_name=(
+            f"{field_name}.{parameter_name}.low"
+        ),
+    )
+
+    _validate_parameter_value(
+        parameter_name=parameter_name,
+        value=high,
+        field_name=(
+            f"{field_name}.{parameter_name}.high"
+        ),
+    )
+
+    return parameter_config
+
+
+def _validate_complete_optuna_search_space(
+    search_space: IsolationForestOptunaSearchSpace,
+    *,
+    field_name: str,
+) -> IsolationForestOptunaSearchSpace:
+    """
+    Validate one complete Isolation Forest Optuna search space.
+
+    When a user supplies a search space, every configurable Isolation Forest
+    hyperparameter must be represented.
+
+    If the user omits the search space entirely, the internal default Optuna
+    search space is used instead.
+    """
+
+    if not search_space:
+        raise ValueError(
+            f"{field_name} cannot be empty."
+        )
+
+    expected_parameters = set(
+        DEFAULT_ISOLATION_FOREST_HYPERPARAMETERS
+    )
+
+    supplied_parameters = set(
+        search_space
+    )
+
+    missing_parameters = sorted(
+        expected_parameters
+        - supplied_parameters
+    )
+
+    unexpected_parameters = sorted(
+        supplied_parameters
+        - expected_parameters
+    )
+
+    if missing_parameters:
+        raise ValueError(
+            f"{field_name} must provide a search definition for every "
+            f"configurable Isolation Forest hyperparameter. "
+            f"Missing: {missing_parameters}"
+        )
+
+    if unexpected_parameters:
+        raise ValueError(
+            f"{field_name} contains unsupported Isolation Forest "
+            f"hyperparameters: {unexpected_parameters}"
+        )
+
+    validated: IsolationForestOptunaSearchSpace = {}
+
+    for parameter_name, parameter_config in search_space.items():
+        validated[
+            parameter_name
+        ] = _validate_optuna_parameter_config(
+            parameter_name=parameter_name,
+            parameter_config=parameter_config,
+            field_name=field_name,
+        )
+
+    return validated
+
+
+def _parse_default_optuna_search_space(
+) -> IsolationForestOptunaSearchSpace:
+    """
+    Parse and validate the data-only default Isolation Forest Optuna space.
+    """
+
+    parsed: IsolationForestOptunaSearchSpace = {}
+
+    for (
+        parameter_name,
+        raw_config,
+    ) in DEFAULT_ISOLATION_FOREST_OPTUNA_SEARCH_SPACE.items():
+        parsed[
+            parameter_name
+        ] = IsolationForestOptunaParameterConfig.model_validate(
+            dict(
+                raw_config
+            )
+        )
+
+    return _validate_complete_optuna_search_space(
+        parsed,
+        field_name="default Optuna search space",
+    )
+
+
+class IsolationForestOptunaConfig(BaseModel):
+    """Define Optuna-specific Isolation Forest optimization controls."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+    n_trials: int = Field(
+        default=DEFAULT_ISOLATION_FOREST_OPTUNA_N_TRIALS,
+        gt=0,
+        description=(
+            "Maximum number of Optuna trials executed for one Isolation "
+            "Forest site-series tuning run."
+        ),
+    )
+
+    sampler_seed: int | None = Field(
+        default=DEFAULT_ISOLATION_FOREST_OPTUNA_SAMPLER_SEED,
+        description=(
+            "Optional seed used by the Optuna sampler for reproducibility."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Chronological split configuration
+# ---------------------------------------------------------------------------
 
 
 class ResolvedIsolationForestSplitConfig(BaseModel):
@@ -308,7 +846,8 @@ class IsolationForestSplitConfig(BaseModel):
     """
     Define optional post-history split overrides.
 
-    When tuning is enabled the resolved order is::
+    When tuning is enabled, regardless of fixed or Optuna tuning, the
+    resolved order is::
 
         train -> validation -> test
 
@@ -361,7 +900,10 @@ class IsolationForestSplitConfig(BaseModel):
                 for value in supplied
             )
 
-            if supplied_count not in {0, 3}:
+            if supplied_count not in {
+                0,
+                3,
+            }:
                 raise ValueError(
                     "When Isolation Forest tuning is enabled, either omit "
                     "all split percentages to use defaults or provide train, "
@@ -426,8 +968,15 @@ class IsolationForestSplitConfig(BaseModel):
                 "hyperparameter tuning is disabled."
             )
 
-        train_supplied = self.train_percentage is not None
-        test_supplied = self.test_percentage is not None
+        train_supplied = (
+            self.train_percentage
+            is not None
+        )
+
+        test_supplied = (
+            self.test_percentage
+            is not None
+        )
 
         if train_supplied != test_supplied:
             raise ValueError(
@@ -473,8 +1022,17 @@ class IsolationForestSplitConfig(BaseModel):
         )
 
 
+# ---------------------------------------------------------------------------
+# Tuning controls shared by fixed and Optuna
+# ---------------------------------------------------------------------------
+
+
 class IsolationForestTuningConfig(BaseModel):
-    """Define how complete Isolation Forest candidates are compared."""
+    """
+    Define how Isolation Forest tuning configurations are evaluated.
+
+    This metric is shared by fixed-candidate tuning and Optuna tuning.
+    """
 
     model_config = ConfigDict(
         extra="forbid",
@@ -484,8 +1042,8 @@ class IsolationForestTuningConfig(BaseModel):
         default=DEFAULT_ISOLATION_FOREST_SELECTION_METRIC,
         min_length=1,
         description=(
-            "Validation metric used to select the best complete Isolation "
-            "Forest hyperparameter candidate."
+            "Validation metric used to evaluate Isolation Forest "
+            "hyperparameter configurations."
         ),
     )
 
@@ -497,9 +1055,13 @@ class IsolationForestTuningConfig(BaseModel):
         cls,
         value: str,
     ) -> str:
-        """Validate candidate-selection metric against defaults.py."""
+        """Validate tuning-selection metric against defaults.py."""
 
-        normalized = value.strip().lower()
+        normalized = (
+            value
+            .strip()
+            .lower()
+        )
 
         if normalized not in ISOLATION_FOREST_ALLOWED_SELECTION_METRICS:
             raise ValueError(
@@ -509,6 +1071,11 @@ class IsolationForestTuningConfig(BaseModel):
             )
 
         return normalized
+
+
+# ---------------------------------------------------------------------------
+# Model-specific dataset validation rules
+# ---------------------------------------------------------------------------
 
 
 class IsolationForestValidationRules(BaseModel):
@@ -541,10 +1108,21 @@ class IsolationForestValidationRules(BaseModel):
         default=DEFAULT_ISOLATION_FOREST_REQUIRE_ALL_RESOLVED_FEATURES,
     )
 
-    column_role_rules: dict[str, dict[str, object]] = Field(
+    column_role_rules: dict[
+        str,
+        dict[
+            str,
+            object,
+        ],
+    ] = Field(
         default_factory=lambda: {
-            role: dict(rule)
-            for role, rule in DEFAULT_ISOLATION_FOREST_COLUMN_ROLE_RULES.items()
+            role: dict(
+                rule
+            )
+            for (
+                role,
+                rule,
+            ) in DEFAULT_ISOLATION_FOREST_COLUMN_ROLE_RULES.items()
         },
         description=(
             "Logical rules defining X features and compulsory non-feature "
@@ -552,7 +1130,10 @@ class IsolationForestValidationRules(BaseModel):
         ),
     )
 
-    direction_feature_rule: dict[str, object] = Field(
+    direction_feature_rule: dict[
+        str,
+        object,
+    ] = Field(
         default_factory=lambda: dict(
             DEFAULT_ISOLATION_FOREST_DIRECTION_FEATURE_RULE
         ),
@@ -562,7 +1143,9 @@ class IsolationForestValidationRules(BaseModel):
         ),
     )
 
-    trusted_train_statuses: frozenset[int] = Field(
+    trusted_train_statuses: frozenset[
+        int
+    ] = Field(
         default=DEFAULT_ISOLATION_FOREST_TRUSTED_TRAIN_STATUSES,
     )
 
@@ -586,23 +1169,47 @@ class IsolationForestValidationRules(BaseModel):
     )
 
 
-class IsolationForestTrainingConfig(CommonTrainingConfig):
+# ---------------------------------------------------------------------------
+# Complete Isolation Forest request
+# ---------------------------------------------------------------------------
+
+
+class IsolationForestTrainingConfig(
+    CommonTrainingConfig
+):
     """
     Define the complete Part D Isolation Forest request.
 
-    Four hyperparameter modes are supported:
+    Six hyperparameter input modes are supported:
 
-    1. tuning enabled + candidate list supplied;
-    2. tuning enabled + no candidate list -> internal default candidates;
-    3. tuning disabled + single configuration supplied;
-    4. tuning disabled + no configuration -> internal single default.
+    Direct training
+    ---------------
+    1. tuning disabled + single configuration supplied;
+    2. tuning disabled + no configuration -> internal single default.
+
+    Fixed tuning
+    ------------
+    3. tuning enabled + method='fixed' + candidate list supplied;
+    4. tuning enabled + method='fixed' + no candidate list
+       -> internal default candidates.
+
+    Optuna tuning
+    -------------
+    5. tuning enabled + method='optuna' + search space supplied;
+    6. tuning enabled + method='optuna' + no search space
+       -> internal default Optuna search space.
+
+    Optuna controls such as n_trials and sampler_seed are optional and use
+    internal defaults when omitted.
     """
 
     model_config = ConfigDict(
         extra="forbid",
     )
 
-    model_type: Literal["isolation_forest"] = Field(
+    model_type: Literal[
+        "isolation_forest"
+    ] = Field(
         default="isolation_forest",
     )
 
@@ -610,7 +1217,14 @@ class IsolationForestTrainingConfig(CommonTrainingConfig):
         default_factory=IsolationForestSplitConfig,
     )
 
-    hyperparameters: IsolationForestHyperparameterSet | None = Field(
+    # ------------------------------------------------------------------
+    # Direct training
+    # ------------------------------------------------------------------
+
+    hyperparameters: (
+        IsolationForestHyperparameterSet
+        | None
+    ) = Field(
         default=None,
         description=(
             "One complete configurable Isolation Forest hyperparameter set "
@@ -619,22 +1233,63 @@ class IsolationForestTrainingConfig(CommonTrainingConfig):
         ),
     )
 
+    # ------------------------------------------------------------------
+    # Fixed tuning
+    # ------------------------------------------------------------------
+
     hyperparameter_candidates: (
-        list[IsolationForestHyperparameterSet]
+        list[
+            IsolationForestHyperparameterSet
+        ]
         | None
     ) = Field(
         default=None,
         min_length=1,
         description=(
             "Complete configurable Isolation Forest hyperparameter "
-            "candidates used when tuning is enabled. No maximum candidate "
-            "count is imposed. Omit to use the internal default candidates."
+            "candidates used when tuning is enabled with method='fixed'. "
+            "Omit to use the internal default candidates."
         ),
     )
+
+    # ------------------------------------------------------------------
+    # Optuna tuning
+    # ------------------------------------------------------------------
+
+    optuna_search_space: (
+        IsolationForestOptunaSearchSpace
+        | None
+    ) = Field(
+        default=None,
+        description=(
+            "Complete Isolation Forest Optuna search space used when tuning "
+            "is enabled with method='optuna'. Omit to use the internal "
+            "default Optuna search space."
+        ),
+    )
+
+    optuna: (
+        IsolationForestOptunaConfig
+        | None
+    ) = Field(
+        default=None,
+        description=(
+            "Optional Optuna-specific controls. Omit to use internal "
+            "defaults for trial count and sampler seed."
+        ),
+    )
+
+    # ------------------------------------------------------------------
+    # Controls shared by fixed and Optuna tuning
+    # ------------------------------------------------------------------
 
     tuning: IsolationForestTuningConfig = Field(
         default_factory=IsolationForestTuningConfig,
     )
+
+    # ------------------------------------------------------------------
+    # Field validation
+    # ------------------------------------------------------------------
 
     @field_validator(
         "hyperparameters",
@@ -642,9 +1297,15 @@ class IsolationForestTrainingConfig(CommonTrainingConfig):
     @classmethod
     def validate_hyperparameters(
         cls,
-        value: IsolationForestHyperparameterSet | None,
-    ) -> IsolationForestHyperparameterSet | None:
-        """Validate an explicitly supplied single configuration."""
+        value: (
+            IsolationForestHyperparameterSet
+            | None
+        ),
+    ) -> (
+        IsolationForestHyperparameterSet
+        | None
+    ):
+        """Validate an explicitly supplied direct configuration."""
 
         if value is None:
             return None
@@ -660,9 +1321,19 @@ class IsolationForestTrainingConfig(CommonTrainingConfig):
     @classmethod
     def validate_hyperparameter_candidates(
         cls,
-        value: list[IsolationForestHyperparameterSet] | None,
-    ) -> list[IsolationForestHyperparameterSet] | None:
-        """Validate every explicitly supplied complete tuning candidate."""
+        value: (
+            list[
+                IsolationForestHyperparameterSet
+            ]
+            | None
+        ),
+    ) -> (
+        list[
+            IsolationForestHyperparameterSet
+        ]
+        | None
+    ):
+        """Validate every explicitly supplied fixed tuning candidate."""
 
         if value is None:
             return None
@@ -674,39 +1345,144 @@ class IsolationForestTrainingConfig(CommonTrainingConfig):
                     f"hyperparameter_candidates[{index}]"
                 ),
             )
-            for index, candidate in enumerate(
+            for (
+                index,
+                candidate,
+            ) in enumerate(
                 value
             )
         ]
 
-    @model_validator(mode="after")
+    @field_validator(
+        "optuna_search_space",
+    )
+    @classmethod
+    def validate_optuna_search_space(
+        cls,
+        value: (
+            IsolationForestOptunaSearchSpace
+            | None
+        ),
+    ) -> (
+        IsolationForestOptunaSearchSpace
+        | None
+    ):
+        """Validate an explicitly supplied complete Optuna search space."""
+
+        if value is None:
+            return None
+
+        return _validate_complete_optuna_search_space(
+            value,
+            field_name="optuna_search_space",
+        )
+
+    # ------------------------------------------------------------------
+    # Mode validation
+    # ------------------------------------------------------------------
+
+    @model_validator(
+        mode="after"
+    )
     def validate_hyperparameter_mode(
         self,
     ) -> IsolationForestTrainingConfig:
-        """Validate list-vs-single input and split mode."""
+        """
+        Enforce direct-vs-fixed-vs-Optuna input exclusivity.
 
-        if self.hyperparameter_tuning_enabled:
-            if self.hyperparameters is not None:
+        Missing fixed candidates or missing Optuna search definitions are
+        valid because internal defaults are resolved later.
+        """
+
+        # --------------------------------------------------------------
+        # Tuning disabled
+        # --------------------------------------------------------------
+
+        if not self.hyperparameter_tuning_enabled:
+            if self.hyperparameter_candidates is not None:
                 raise ValueError(
-                    "hyperparameters cannot be supplied when "
-                    "hyperparameter_tuning_enabled=True. Supply "
-                    "hyperparameter_candidates instead, or omit candidates "
-                    "to use the internal default candidate list."
+                    "hyperparameter_candidates cannot be supplied when "
+                    "hyperparameter_tuning_enabled=False."
                 )
 
-        elif self.hyperparameter_candidates is not None:
+            if self.optuna_search_space is not None:
+                raise ValueError(
+                    "optuna_search_space cannot be supplied when "
+                    "hyperparameter_tuning_enabled=False."
+                )
+
+            if self.optuna is not None:
+                raise ValueError(
+                    "optuna settings cannot be supplied when "
+                    "hyperparameter_tuning_enabled=False."
+                )
+
+            self.split.resolve_for_tuning(
+                tuning_enabled=False,
+            )
+
+            return self
+
+        # --------------------------------------------------------------
+        # All tuning modes
+        # --------------------------------------------------------------
+
+        if self.hyperparameters is not None:
             raise ValueError(
-                "hyperparameter_candidates cannot be supplied when "
-                "hyperparameter_tuning_enabled=False. Supply "
-                "hyperparameters instead, or omit them to use the internal "
-                "single default configuration."
+                "hyperparameters cannot be supplied when "
+                "hyperparameter_tuning_enabled=True."
+            )
+
+        # --------------------------------------------------------------
+        # Fixed tuning
+        # --------------------------------------------------------------
+
+        if (
+            self.hyperparameter_tuning_method
+            == "fixed"
+        ):
+            if self.optuna_search_space is not None:
+                raise ValueError(
+                    "optuna_search_space cannot be supplied when "
+                    "hyperparameter_tuning_method='fixed'."
+                )
+
+            if self.optuna is not None:
+                raise ValueError(
+                    "optuna settings cannot be supplied when "
+                    "hyperparameter_tuning_method='fixed'."
+                )
+
+        # --------------------------------------------------------------
+        # Optuna tuning
+        # --------------------------------------------------------------
+
+        elif (
+            self.hyperparameter_tuning_method
+            == "optuna"
+        ):
+            if self.hyperparameter_candidates is not None:
+                raise ValueError(
+                    "hyperparameter_candidates cannot be supplied when "
+                    "hyperparameter_tuning_method='optuna'."
+                )
+
+        else:
+            raise ValueError(
+                "Unsupported Isolation Forest "
+                "hyperparameter_tuning_method: "
+                f"{self.hyperparameter_tuning_method}"
             )
 
         self.split.resolve_for_tuning(
-            tuning_enabled=self.hyperparameter_tuning_enabled,
+            tuning_enabled=True,
         )
 
         return self
+
+    # ------------------------------------------------------------------
+    # Direct-training resolution
+    # ------------------------------------------------------------------
 
     def resolve_hyperparameters(
         self,
@@ -726,19 +1502,39 @@ class IsolationForestTrainingConfig(CommonTrainingConfig):
         )
 
         return _validate_complete_hyperparameter_set(
-            dict(parameters),
+            dict(
+                parameters
+            ),
             field_name="resolved hyperparameters",
         )
 
+    # ------------------------------------------------------------------
+    # Fixed-tuning resolution
+    # ------------------------------------------------------------------
+
     def resolve_hyperparameter_candidates(
         self,
-    ) -> tuple[IsolationForestHyperparameterSet, ...]:
-        """Return supplied candidates or the internal default candidate list."""
+    ) -> tuple[
+        IsolationForestHyperparameterSet,
+        ...,
+    ]:
+        """
+        Return user-supplied or default fixed hyperparameter candidates.
+        """
 
         if not self.hyperparameter_tuning_enabled:
             raise ValueError(
                 "resolve_hyperparameter_candidates cannot be used while "
                 "hyperparameter tuning is disabled."
+            )
+
+        if (
+            self.hyperparameter_tuning_method
+            != "fixed"
+        ):
+            raise ValueError(
+                "resolve_hyperparameter_candidates requires "
+                "hyperparameter_tuning_method='fixed'."
             )
 
         candidates = (
@@ -749,29 +1545,102 @@ class IsolationForestTrainingConfig(CommonTrainingConfig):
 
         if not candidates:
             raise ValueError(
-                "The resolved Isolation Forest hyperparameter candidate "
-                "list cannot be empty."
+                "The resolved Isolation Forest fixed hyperparameter "
+                "candidate list cannot be empty."
             )
 
         return tuple(
             _validate_complete_hyperparameter_set(
-                dict(candidate),
+                dict(
+                    candidate
+                ),
                 field_name=(
                     f"resolved hyperparameter candidate[{index}]"
                 ),
             )
-            for index, candidate in enumerate(
+            for (
+                index,
+                candidate,
+            ) in enumerate(
                 candidates
             )
         )
 
+    # ------------------------------------------------------------------
+    # Optuna resolution
+    # ------------------------------------------------------------------
+
+    def resolve_optuna_search_space(
+        self,
+    ) -> IsolationForestOptunaSearchSpace:
+        """
+        Return user-supplied or default Isolation Forest Optuna search space.
+        """
+
+        if not self.hyperparameter_tuning_enabled:
+            raise ValueError(
+                "resolve_optuna_search_space cannot be used while "
+                "hyperparameter tuning is disabled."
+            )
+
+        if (
+            self.hyperparameter_tuning_method
+            != "optuna"
+        ):
+            raise ValueError(
+                "resolve_optuna_search_space requires "
+                "hyperparameter_tuning_method='optuna'."
+            )
+
+        if self.optuna_search_space is not None:
+            return _validate_complete_optuna_search_space(
+                dict(
+                    self.optuna_search_space
+                ),
+                field_name="resolved Optuna search space",
+            )
+
+        return _parse_default_optuna_search_space()
+
+    def resolve_optuna_config(
+        self,
+    ) -> IsolationForestOptunaConfig:
+        """Return user-supplied or default Optuna execution controls."""
+
+        if not self.hyperparameter_tuning_enabled:
+            raise ValueError(
+                "resolve_optuna_config cannot be used while "
+                "hyperparameter tuning is disabled."
+            )
+
+        if (
+            self.hyperparameter_tuning_method
+            != "optuna"
+        ):
+            raise ValueError(
+                "resolve_optuna_config requires "
+                "hyperparameter_tuning_method='optuna'."
+            )
+
+        return (
+            self.optuna
+            if self.optuna is not None
+            else IsolationForestOptunaConfig()
+        )
+
+    # ------------------------------------------------------------------
+    # Other resolved contracts
+    # ------------------------------------------------------------------
+
     def resolve_split(
         self,
     ) -> ResolvedIsolationForestSplitConfig:
-        """Return the split percentages appropriate for the tuning mode."""
+        """Return split percentages appropriate for tuning ON/OFF."""
 
         return self.split.resolve_for_tuning(
-            tuning_enabled=self.hyperparameter_tuning_enabled,
+            tuning_enabled=(
+                self.hyperparameter_tuning_enabled
+            ),
         )
 
     def get_validation_rules(
@@ -785,6 +1654,10 @@ class IsolationForestTrainingConfig(CommonTrainingConfig):
 __all__ = [
     "IsolationForestHyperparameterSet",
     "IsolationForestHyperparameterValue",
+    "IsolationForestOptunaConfig",
+    "IsolationForestOptunaParameterConfig",
+    "IsolationForestOptunaParameterType",
+    "IsolationForestOptunaSearchSpace",
     "IsolationForestSplitConfig",
     "IsolationForestTrainingConfig",
     "IsolationForestTuningConfig",

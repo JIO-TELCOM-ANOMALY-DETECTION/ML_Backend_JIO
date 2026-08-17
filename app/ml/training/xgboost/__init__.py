@@ -11,7 +11,8 @@ from this package rather than reaching into individual implementation files.
 
 from .training import (
     XGBoostTrainingResult,
-    train_xgboost_series,
+    train_xgboost_fixed_series,
+    train_xgboost_optuna_series,
 )
 from .residual_calibration import (
     XGBoostCalibrationResult,
@@ -25,7 +26,8 @@ from .testing import (
 
 __all__ = [
     "XGBoostTrainingResult",
-    "train_xgboost_series",
+    "train_xgboost_fixed_series",
+    "train_xgboost_optuna_series",
     "XGBoostCalibrationResult",
     "calibrate_xgboost_series",
     "XGBoostTestingResult",

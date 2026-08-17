@@ -1,9 +1,9 @@
 """
-Part D XGBoost training.
+Part D XGBoost direct/fixed-candidate training.
 
 Intended project location::
 
-    app/ml/training/xgboost/training.py
+    app/ml/training/xgboost/fixed_training.py
 
 This module owns the XGBoost fitting stage for ONE Composite_ID/site series.
 

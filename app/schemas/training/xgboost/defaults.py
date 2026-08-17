@@ -96,6 +96,78 @@ XGBOOST_HYPERPARAMETER_RULES: Final = {
     },
 }
 
+# ---------------------------------------------------------------------------
+# Default Optuna hyperparameter search space
+# ---------------------------------------------------------------------------
+
+# Used when:
+#
+#     hyperparameter_tuning_enabled = True
+#     hyperparameter_tuning_method = "optuna"
+#
+# and the user does not provide ``optuna_search_space``.
+#
+# Every configurable XGBoost hyperparameter must be represented here because
+# the XGBoost schema treats the Optuna search space as a complete contract.
+#
+# ``type`` is not stored here. xgboost.py derives whether suggest_int() or
+# suggest_float() should be used from XGBOOST_HYPERPARAMETER_RULES.
+
+DEFAULT_XGBOOST_OPTUNA_SEARCH_SPACE: Final = {
+    "learning_rate": {
+        "low": 0.01,
+        "high": 0.20,
+        "log": True,
+    },
+    "max_depth": {
+        "low": 2,
+        "high": 10,
+        "log": False,
+    },
+    "min_child_weight": {
+        "low": 1.0,
+        "high": 20.0,
+        "log": False,
+    },
+    "subsample": {
+        "low": 0.50,
+        "high": 1.00,
+        "log": False,
+    },
+    "colsample_bytree": {
+        "low": 0.50,
+        "high": 1.00,
+        "log": False,
+    },
+    "reg_alpha": {
+        "low": 0.0,
+        "high": 5.0,
+        "log": False,
+    },
+    "reg_lambda": {
+        "low": 0.0,
+        "high": 10.0,
+        "log": False,
+    },
+    "gamma": {
+        "low": 0.0,
+        "high": 5.0,
+        "log": False,
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Default Optuna controls
+# ---------------------------------------------------------------------------
+
+# Number of Optuna trials performed for each independently trained site series
+# unless explicitly overridden by the request.
+DEFAULT_XGBOOST_OPTUNA_N_TRIALS: Final = 50
+
+# Fixed sampler seed keeps Optuna's search reproducible across equivalent runs.
+DEFAULT_XGBOOST_OPTUNA_SAMPLER_SEED: Final = 42
+
 
 # ---------------------------------------------------------------------------
 # Default hyperparameter tuning candidates

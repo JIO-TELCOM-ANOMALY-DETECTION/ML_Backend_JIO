@@ -4,9 +4,9 @@ Shared schemas for Part D model training.
 This module defines configuration shared by every supported training
 algorithm.
 
-Model-specific hyperparameters, data splits, feature requirements,
-calibration settings, and defaults belong to their respective model
-schema packages.
+Model-specific hyperparameters, tuning search spaces, data splits,
+feature requirements, calibration settings, and defaults belong to their
+respective model schema packages.
 
 This module does not load datasets, train models, calculate thresholds,
 or save model outputs.
@@ -31,6 +31,12 @@ TrainingModelType = Literal[
 ]
 
 
+HyperparameterTuningMethod = Literal[
+    "fixed",
+    "optuna",
+]
+
+
 class CommonTrainingConfig(BaseModel):
     """
     Define settings shared by every supported training algorithm.
@@ -39,9 +45,10 @@ class CommonTrainingConfig(BaseModel):
     model-specific residual or anomaly-score distribution are considered
     during calibration.
 
-    Hyperparameter tuning controls whether the model-specific training
-    workflow evaluates multiple complete hyperparameter candidates or
-    directly uses one hyperparameter configuration.
+    Hyperparameter tuning controls whether model-specific tuning is performed.
+    When tuning is enabled, hyperparameter_tuning_method selects the tuning
+    strategy. When tuning is disabled, one model-specific hyperparameter
+    configuration is used directly.
     """
 
     model_config = ConfigDict(
@@ -64,9 +71,19 @@ class CommonTrainingConfig(BaseModel):
 
     hyperparameter_tuning_enabled: bool = Field(
         description=(
-            "When True, use the model-specific hyperparameter candidate "
-            "list. When False, use one model-specific hyperparameter "
-            "configuration."
+            "When True, perform model-specific hyperparameter tuning. "
+            "When False, use one model-specific hyperparameter "
+            "configuration directly."
+        ),
+    )
+
+    hyperparameter_tuning_method: HyperparameterTuningMethod = Field(
+        default="fixed",
+        description=(
+            "Hyperparameter tuning strategy used when tuning is enabled. "
+            "'fixed' evaluates complete predefined candidate configurations; "
+            "'optuna' searches a model-specific hyperparameter search space. "
+            "Ignored when hyperparameter_tuning_enabled is False."
         ),
     )
 
@@ -74,4 +91,5 @@ class CommonTrainingConfig(BaseModel):
 __all__ = [
     "CommonTrainingConfig",
     "TrainingModelType",
+    "HyperparameterTuningMethod",
 ]

@@ -7,13 +7,15 @@ Intended project location::
 
 This module defines:
 
-- the XGBoost hyperparameter input contract;
-- the four supported hyperparameter modes;
+- the XGBoost fixed hyperparameter input contract;
+- the XGBoost Optuna search-space input contract;
+- direct, fixed-tuning, and Optuna-tuning hyperparameter modes;
 - tuning-aware XGBoost chronological split percentages;
-- hyperparameter-tuning controls;
+- shared XGBoost tuning controls;
+- Optuna-specific tuning controls;
 - residual-calibration quantile controls;
 - model-specific dataset-validation rules; and
-- resolution of user-provided or default hyperparameters.
+- resolution of user-provided or default hyperparameter settings.
 
 History is not percentage-configured here. The Part D loader must reserve the
 minimum history required by the resolved Part C feature-engineering
@@ -25,8 +27,9 @@ Actual default values belong to::
     app/schemas/training/xgboost/defaults.py
 
 This module does not load datasets, split dataframes, train XGBoost,
-perform hyperparameter tuning, calculate residual thresholds, test models,
-or save outputs. Those responsibilities belong to the Part D ML modules.
+perform fixed hyperparameter tuning, perform Optuna optimization,
+calculate residual thresholds, test models, or save outputs. Those
+responsibilities belong to the Part D ML modules.
 """
 
 from __future__ import annotations
@@ -46,6 +49,7 @@ from app.schemas.training.common import CommonTrainingConfig
 
 from .defaults import (
     DEFAULT_XGBOOST_CALIBRATION_PERCENTAGE,
+    DEFAULT_XGBOOST_COLUMN_ROLE_RULES,
     DEFAULT_XGBOOST_EARLY_STOPPING_ROUNDS,
     DEFAULT_XGBOOST_EXCLUDED_PART_C_FEATURE_TYPES,
     DEFAULT_XGBOOST_HYPERPARAMETER_CANDIDATES,
@@ -55,24 +59,36 @@ from .defaults import (
     DEFAULT_XGBOOST_MINIMUM_TEST_POINTS,
     DEFAULT_XGBOOST_MINIMUM_TRAIN_POINTS,
     DEFAULT_XGBOOST_MINIMUM_VALIDATION_POINTS,
+    DEFAULT_XGBOOST_OPTUNA_N_TRIALS,
+    DEFAULT_XGBOOST_OPTUNA_SAMPLER_SEED,
+    DEFAULT_XGBOOST_OPTUNA_SEARCH_SPACE,
     DEFAULT_XGBOOST_PRIMARY_SELECTION_METRIC,
-    DEFAULT_XGBOOST_RESIDUAL_QUANTILE,
-    DEFAULT_XGBOOST_COLUMN_ROLE_RULES,
     DEFAULT_XGBOOST_REQUIRE_ALL_RESOLVED_FEATURES,
     DEFAULT_XGBOOST_REQUIRE_COMPLETE_FEATURE_ROWS,
     DEFAULT_XGBOOST_REQUIRE_NON_NULL_TARGET,
-    DEFAULT_XGBOOST_USE_ONLY_RESOLVED_FEATURE_COLUMNS,
+    DEFAULT_XGBOOST_RESIDUAL_QUANTILE,
     DEFAULT_XGBOOST_SECONDARY_SELECTION_METRIC,
     DEFAULT_XGBOOST_TEST_PERCENTAGE,
     DEFAULT_XGBOOST_TRAIN_PERCENTAGE,
     DEFAULT_XGBOOST_TRUSTED_TARGET_STATUSES,
+    DEFAULT_XGBOOST_USE_ONLY_RESOLVED_FEATURE_COLUMNS,
     DEFAULT_XGBOOST_VALIDATION_PERCENTAGE,
     XGBOOST_ALLOWED_SELECTION_METRICS,
     XGBOOST_HYPERPARAMETER_RULES,
 )
 
 
-XGBoostHyperparameterValue: TypeAlias = str | int | float | bool
+# ---------------------------------------------------------------------------
+# Fixed/direct hyperparameter contracts
+# ---------------------------------------------------------------------------
+
+XGBoostHyperparameterValue: TypeAlias = (
+    str
+    | int
+    | float
+    | bool
+)
+
 XGBoostHyperparameterSet: TypeAlias = dict[
     str,
     XGBoostHyperparameterValue,
@@ -100,25 +116,55 @@ def _validate_parameter_value(
     expected_type = rule["type"]
 
     if expected_type == "int":
-        if isinstance(value, bool) or not isinstance(value, int):
+        if (
+            isinstance(
+                value,
+                bool,
+            )
+            or not isinstance(
+                value,
+                int,
+            )
+        ):
             raise ValueError(
                 f"{field_name}.{parameter_name} must be an integer."
             )
 
     elif expected_type == "number":
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
+        if (
+            isinstance(
+                value,
+                bool,
+            )
+            or not isinstance(
+                value,
+                (
+                    int,
+                    float,
+                ),
+            )
+        ):
             raise ValueError(
                 f"{field_name}.{parameter_name} must be numeric."
             )
 
     elif expected_type == "str":
-        if not isinstance(value, str) or not value.strip():
+        if (
+            not isinstance(
+                value,
+                str,
+            )
+            or not value.strip()
+        ):
             raise ValueError(
                 f"{field_name}.{parameter_name} must be a non-empty string."
             )
 
     elif expected_type == "bool":
-        if not isinstance(value, bool):
+        if not isinstance(
+            value,
+            bool,
+        ):
             raise ValueError(
                 f"{field_name}.{parameter_name} must be a boolean."
             )
@@ -129,34 +175,66 @@ def _validate_parameter_value(
             f"XGBoost hyperparameter '{parameter_name}'."
         )
 
-    if expected_type in {"int", "number"}:
-        numeric_value = float(value)
+    if expected_type in {
+        "int",
+        "number",
+    }:
+        numeric_value = float(
+            value
+        )
 
-        minimum = rule.get("ge")
-        strict_minimum = rule.get("gt")
-        maximum = rule.get("le")
-        strict_maximum = rule.get("lt")
+        minimum = rule.get(
+            "ge"
+        )
 
-        if minimum is not None and numeric_value < float(minimum):
+        strict_minimum = rule.get(
+            "gt"
+        )
+
+        maximum = rule.get(
+            "le"
+        )
+
+        strict_maximum = rule.get(
+            "lt"
+        )
+
+        if (
+            minimum is not None
+            and numeric_value < float(
+                minimum
+            )
+        ):
             raise ValueError(
                 f"{field_name}.{parameter_name} must be >= {minimum}."
             )
 
-        if strict_minimum is not None and numeric_value <= float(
-            strict_minimum
+        if (
+            strict_minimum is not None
+            and numeric_value <= float(
+                strict_minimum
+            )
         ):
             raise ValueError(
                 f"{field_name}.{parameter_name} must be > "
                 f"{strict_minimum}."
             )
 
-        if maximum is not None and numeric_value > float(maximum):
+        if (
+            maximum is not None
+            and numeric_value > float(
+                maximum
+            )
+        ):
             raise ValueError(
                 f"{field_name}.{parameter_name} must be <= {maximum}."
             )
 
-        if strict_maximum is not None and numeric_value >= float(
-            strict_maximum
+        if (
+            strict_maximum is not None
+            and numeric_value >= float(
+                strict_maximum
+            )
         ):
             raise ValueError(
                 f"{field_name}.{parameter_name} must be < "
@@ -173,8 +251,6 @@ def _validate_complete_hyperparameter_set(
     Validate one complete user-configurable XGBoost parameter set.
 
     The keys of DEFAULT_XGBOOST_HYPERPARAMETERS define the complete contract.
-    Adding or removing a configurable hyperparameter therefore requires
-    changes only in defaults.py.
     """
 
     if not parameters:
@@ -219,7 +295,284 @@ def _validate_complete_hyperparameter_set(
             field_name=field_name,
         )
 
-    return dict(parameters)
+    return dict(
+        parameters
+    )
+
+
+# ---------------------------------------------------------------------------
+# Optuna hyperparameter search-space contracts
+# ---------------------------------------------------------------------------
+
+
+class XGBoostOptunaParameterRange(BaseModel):
+    """
+    Define the Optuna search range for one configurable XGBoost parameter.
+
+    Parameter type is derived from XGBOOST_HYPERPARAMETER_RULES rather than
+    supplied separately by the user.
+
+    Integer XGBoost parameters are later sampled with suggest_int.
+    Numeric XGBoost parameters are later sampled with suggest_float.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+    )
+
+    low: int | float = Field(
+        description=(
+            "Inclusive lower boundary of the Optuna search range."
+        ),
+    )
+
+    high: int | float = Field(
+        description=(
+            "Inclusive upper boundary of the Optuna search range."
+        ),
+    )
+
+    log: bool = Field(
+        default=False,
+        description=(
+            "When True, request logarithmic sampling across the range. "
+            "The lower boundary must then be greater than zero."
+        ),
+    )
+
+
+XGBoostOptunaSearchSpace: TypeAlias = dict[
+    str,
+    XGBoostOptunaParameterRange,
+]
+
+
+def _validate_optuna_parameter_range(
+    *,
+    parameter_name: str,
+    parameter_range: XGBoostOptunaParameterRange,
+    field_name: str,
+) -> XGBoostOptunaParameterRange:
+    """Validate one Optuna range against the XGBoost parameter contract."""
+
+    rule = XGBOOST_HYPERPARAMETER_RULES.get(
+        parameter_name
+    )
+
+    if rule is None:
+        raise ValueError(
+            f"{field_name} contains unsupported XGBoost hyperparameter "
+            f"'{parameter_name}'."
+        )
+
+    expected_type = rule.get(
+        "type"
+    )
+
+    if expected_type not in {
+        "int",
+        "number",
+    }:
+        raise ValueError(
+            f"{field_name}.{parameter_name} cannot use a numeric Optuna "
+            "range because its XGBoost validation type is "
+            f"'{expected_type}'."
+        )
+
+    low = parameter_range.low
+    high = parameter_range.high
+
+    # Integer parameters require integer search boundaries.
+    if expected_type == "int":
+        if (
+            isinstance(
+                low,
+                bool,
+            )
+            or not isinstance(
+                low,
+                int,
+            )
+        ):
+            raise ValueError(
+                f"{field_name}.{parameter_name}.low must be an integer."
+            )
+
+        if (
+            isinstance(
+                high,
+                bool,
+            )
+            or not isinstance(
+                high,
+                int,
+            )
+        ):
+            raise ValueError(
+                f"{field_name}.{parameter_name}.high must be an integer."
+            )
+
+    # Reuse the existing XGBoost value rules for both range boundaries.
+    _validate_parameter_value(
+        parameter_name=parameter_name,
+        value=low,
+        field_name=(
+            f"{field_name}.{parameter_name}.low"
+        ),
+    )
+
+    _validate_parameter_value(
+        parameter_name=parameter_name,
+        value=high,
+        field_name=(
+            f"{field_name}.{parameter_name}.high"
+        ),
+    )
+
+    if float(
+        low
+    ) >= float(
+        high
+    ):
+        raise ValueError(
+            f"{field_name}.{parameter_name} requires low < high."
+        )
+
+    if (
+        parameter_range.log
+        and float(
+            low
+        ) <= 0.0
+    ):
+        raise ValueError(
+            f"{field_name}.{parameter_name} requires low > 0 when "
+            "log=True."
+        )
+
+    return parameter_range
+
+
+def _validate_complete_optuna_search_space(
+    search_space: XGBoostOptunaSearchSpace,
+    *,
+    field_name: str,
+) -> XGBoostOptunaSearchSpace:
+    """
+    Validate one complete Optuna XGBoost search space.
+
+    User-supplied search spaces follow the same all-or-none contract as fixed
+    hyperparameter candidate sets: when supplied, every configurable XGBoost
+    hyperparameter must have a search range.
+
+    When no search space is supplied, the internal default search space is
+    resolved instead.
+    """
+
+    if not search_space:
+        raise ValueError(
+            f"{field_name} cannot be empty."
+        )
+
+    expected_parameters = set(
+        DEFAULT_XGBOOST_HYPERPARAMETERS
+    )
+
+    supplied_parameters = set(
+        search_space
+    )
+
+    missing_parameters = sorted(
+        expected_parameters
+        - supplied_parameters
+    )
+
+    unexpected_parameters = sorted(
+        supplied_parameters
+        - expected_parameters
+    )
+
+    if missing_parameters:
+        raise ValueError(
+            f"{field_name} must provide a range for every configurable "
+            f"XGBoost hyperparameter. Missing: {missing_parameters}"
+        )
+
+    if unexpected_parameters:
+        raise ValueError(
+            f"{field_name} contains unsupported XGBoost "
+            f"hyperparameters: {unexpected_parameters}"
+        )
+
+    validated: XGBoostOptunaSearchSpace = {}
+
+    for parameter_name, parameter_range in search_space.items():
+        validated[
+            parameter_name
+        ] = _validate_optuna_parameter_range(
+            parameter_name=parameter_name,
+            parameter_range=parameter_range,
+            field_name=field_name,
+        )
+
+    return validated
+
+
+def _parse_default_optuna_search_space() -> XGBoostOptunaSearchSpace:
+    """Parse and validate the data-only default Optuna search space."""
+
+    parsed: XGBoostOptunaSearchSpace = {}
+
+    for (
+        parameter_name,
+        raw_range,
+    ) in DEFAULT_XGBOOST_OPTUNA_SEARCH_SPACE.items():
+        parsed[
+            parameter_name
+        ] = XGBoostOptunaParameterRange.model_validate(
+            dict(
+                raw_range
+            )
+        )
+
+    return _validate_complete_optuna_search_space(
+        parsed,
+        field_name="default Optuna search space",
+    )
+
+
+class XGBoostOptunaConfig(BaseModel):
+    """
+    Define Optuna-specific optimization controls.
+
+    Search ranges themselves are stored separately in optuna_search_space.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+    n_trials: int = Field(
+        default=DEFAULT_XGBOOST_OPTUNA_N_TRIALS,
+        gt=0,
+        description=(
+            "Maximum number of Optuna trials executed for one XGBoost "
+            "site-series tuning run."
+        ),
+    )
+
+    sampler_seed: int | None = Field(
+        default=DEFAULT_XGBOOST_OPTUNA_SAMPLER_SEED,
+        description=(
+            "Optional seed used by the Optuna sampler for reproducibility."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Chronological split configuration
+# ---------------------------------------------------------------------------
 
 
 class ResolvedXGBoostSplitConfig(BaseModel):
@@ -257,7 +610,8 @@ class XGBoostSplitConfig(BaseModel):
     """
     Define optional post-history split overrides.
 
-    When hyperparameter tuning is enabled the resolved order is::
+    When hyperparameter tuning is enabled, regardless of whether fixed or
+    Optuna tuning is selected, the resolved order is::
 
         train -> validation -> calibration -> test
 
@@ -320,7 +674,10 @@ class XGBoostSplitConfig(BaseModel):
                 for value in supplied
             )
 
-            if supplied_count not in {0, 4}:
+            if supplied_count not in {
+                0,
+                4,
+            }:
                 raise ValueError(
                     "When XGBoost tuning is enabled, either omit all split "
                     "percentages to use defaults or provide train, "
@@ -394,9 +751,20 @@ class XGBoostSplitConfig(BaseModel):
                 "absorbed into training."
             )
 
-        train_supplied = self.train_percentage is not None
-        calibration_supplied = self.calibration_percentage is not None
-        test_supplied = self.test_percentage is not None
+        train_supplied = (
+            self.train_percentage
+            is not None
+        )
+
+        calibration_supplied = (
+            self.calibration_percentage
+            is not None
+        )
+
+        test_supplied = (
+            self.test_percentage
+            is not None
+        )
 
         supplied_count = sum(
             (
@@ -406,7 +774,10 @@ class XGBoostSplitConfig(BaseModel):
             )
         )
 
-        if supplied_count not in {0, 3}:
+        if supplied_count not in {
+            0,
+            3,
+        }:
             raise ValueError(
                 "When XGBoost tuning is disabled, train_percentage, "
                 "calibration_percentage, and test_percentage must either "
@@ -461,8 +832,17 @@ class XGBoostSplitConfig(BaseModel):
         )
 
 
+# ---------------------------------------------------------------------------
+# Shared tuning controls
+# ---------------------------------------------------------------------------
+
+
 class XGBoostTuningConfig(BaseModel):
-    """Define XGBoost candidate-selection and early-stopping controls."""
+    """
+    Define XGBoost validation-selection and early-stopping controls.
+
+    These settings are shared by fixed-candidate tuning and Optuna tuning.
+    """
 
     model_config = ConfigDict(
         extra="forbid",
@@ -472,8 +852,8 @@ class XGBoostTuningConfig(BaseModel):
         default=DEFAULT_XGBOOST_PRIMARY_SELECTION_METRIC,
         min_length=1,
         description=(
-            "Primary validation metric used to select the best complete "
-            "hyperparameter candidate."
+            "Primary validation metric used to evaluate XGBoost "
+            "hyperparameter configurations."
         ),
     )
 
@@ -481,8 +861,8 @@ class XGBoostTuningConfig(BaseModel):
         default=DEFAULT_XGBOOST_SECONDARY_SELECTION_METRIC,
         min_length=1,
         description=(
-            "Tie-break validation metric used when primary candidate "
-            "performance is equal."
+            "Secondary validation metric available as a deterministic "
+            "tie-break when primary performance is equal."
         ),
     )
 
@@ -491,7 +871,7 @@ class XGBoostTuningConfig(BaseModel):
         gt=0,
         description=(
             "Maximum number of boosting trees available while evaluating "
-            "a candidate with early stopping."
+            "a tuning configuration with early stopping."
         ),
     )
 
@@ -499,7 +879,7 @@ class XGBoostTuningConfig(BaseModel):
         default=DEFAULT_XGBOOST_EARLY_STOPPING_ROUNDS,
         gt=0,
         description=(
-            "Validation rounds without improvement before candidate "
+            "Validation rounds without improvement before temporary tuning "
             "training stops."
         ),
     )
@@ -513,9 +893,13 @@ class XGBoostTuningConfig(BaseModel):
         cls,
         value: str,
     ) -> str:
-        """Validate candidate-selection metrics against defaults.py."""
+        """Validate tuning-selection metrics against defaults.py."""
 
-        normalized = value.strip().lower()
+        normalized = (
+            value
+            .strip()
+            .lower()
+        )
 
         if normalized not in XGBOOST_ALLOWED_SELECTION_METRICS:
             raise ValueError(
@@ -526,7 +910,9 @@ class XGBoostTuningConfig(BaseModel):
 
         return normalized
 
-    @model_validator(mode="after")
+    @model_validator(
+        mode="after"
+    )
     def validate_distinct_selection_metrics(
         self,
     ) -> XGBoostTuningConfig:
@@ -544,6 +930,11 @@ class XGBoostTuningConfig(BaseModel):
         return self
 
 
+# ---------------------------------------------------------------------------
+# Residual calibration
+# ---------------------------------------------------------------------------
+
+
 class XGBoostCalibrationConfig(BaseModel):
     """
     Configure XGBoost residual-quantile calibration.
@@ -557,9 +948,7 @@ class XGBoostCalibrationConfig(BaseModel):
     - both uses both 0.01 and 0.99 residual quantiles.
 
     The actual direction is controlled by the shared
-    ``CommonTrainingConfig.threshold_direction`` setting. This schema only
-    configures the quantile; residual calculation and threshold derivation
-    belong to ``app/ml/training/xgboost/residual_calibration.py``.
+    ``CommonTrainingConfig.threshold_direction`` setting.
     """
 
     model_config = ConfigDict(
@@ -572,10 +961,15 @@ class XGBoostCalibrationConfig(BaseModel):
         lt=1.0,
         description=(
             "Upper residual-tail quantile used for calibration. "
-            "The lower-tail quantile is automatically 1 - residual_quantile."
+            "The lower-tail quantile is automatically "
+            "1 - residual_quantile."
         ),
     )
 
+
+# ---------------------------------------------------------------------------
+# Model-specific dataset validation rules
+# ---------------------------------------------------------------------------
 
 
 class XGBoostValidationRules(BaseModel):
@@ -591,8 +985,7 @@ class XGBoostValidationRules(BaseModel):
       never model features.
 
     These values are internal model rules rather than user-editable request
-    fields. The shared Part D validation module retrieves them through
-    ``get_validation_rules``.
+    fields.
     """
 
     model_config = ConfigDict(
@@ -617,7 +1010,10 @@ class XGBoostValidationRules(BaseModel):
         ),
     )
 
-    excluded_part_c_feature_types: tuple[str, ...] = Field(
+    excluded_part_c_feature_types: tuple[
+        str,
+        ...,
+    ] = Field(
         default=DEFAULT_XGBOOST_EXCLUDED_PART_C_FEATURE_TYPES,
         description=(
             "Part C feature request families excluded from X because they "
@@ -625,10 +1021,21 @@ class XGBoostValidationRules(BaseModel):
         ),
     )
 
-    column_role_rules: dict[str, dict[str, object]] = Field(
+    column_role_rules: dict[
+        str,
+        dict[
+            str,
+            object,
+        ],
+    ] = Field(
         default_factory=lambda: {
-            role: dict(rule)
-            for role, rule in DEFAULT_XGBOOST_COLUMN_ROLE_RULES.items()
+            role: dict(
+                rule
+            )
+            for (
+                role,
+                rule,
+            ) in DEFAULT_XGBOOST_COLUMN_ROLE_RULES.items()
         },
         description=(
             "Logical rules defining X features, the required y target, and "
@@ -636,7 +1043,9 @@ class XGBoostValidationRules(BaseModel):
         ),
     )
 
-    trusted_target_statuses: frozenset[int] = Field(
+    trusted_target_statuses: frozenset[
+        int
+    ] = Field(
         default=DEFAULT_XGBOOST_TRUSTED_TARGET_STATUSES,
     )
 
@@ -669,23 +1078,47 @@ class XGBoostValidationRules(BaseModel):
     )
 
 
-class XGBoostTrainingConfig(CommonTrainingConfig):
+# ---------------------------------------------------------------------------
+# Complete XGBoost request
+# ---------------------------------------------------------------------------
+
+
+class XGBoostTrainingConfig(
+    CommonTrainingConfig
+):
     """
     Define the complete Part D XGBoost request.
 
-    Four hyperparameter modes are supported:
+    Six hyperparameter input modes are supported:
 
-    1. tuning enabled + candidate list supplied;
-    2. tuning enabled + no candidate list -> internal default candidates;
-    3. tuning disabled + single configuration supplied;
-    4. tuning disabled + no configuration -> internal single default.
+    Direct training
+    ---------------
+    1. tuning disabled + single configuration supplied;
+    2. tuning disabled + no configuration -> internal single default.
+
+    Fixed tuning
+    ------------
+    3. tuning enabled + method='fixed' + candidate list supplied;
+    4. tuning enabled + method='fixed' + no candidate list
+       -> internal default candidates.
+
+    Optuna tuning
+    -------------
+    5. tuning enabled + method='optuna' + search space supplied;
+    6. tuning enabled + method='optuna' + no search space
+       -> internal default Optuna search space.
+
+    Optuna controls such as n_trials and sampler_seed are optional and use
+    internal defaults when omitted.
     """
 
     model_config = ConfigDict(
         extra="forbid",
     )
 
-    model_type: Literal["xgboost"] = Field(
+    model_type: Literal[
+        "xgboost"
+    ] = Field(
         default="xgboost",
     )
 
@@ -693,7 +1126,14 @@ class XGBoostTrainingConfig(CommonTrainingConfig):
         default_factory=XGBoostSplitConfig,
     )
 
-    hyperparameters: XGBoostHyperparameterSet | None = Field(
+    # ------------------------------------------------------------------
+    # Direct training
+    # ------------------------------------------------------------------
+
+    hyperparameters: (
+        XGBoostHyperparameterSet
+        | None
+    ) = Field(
         default=None,
         description=(
             "One complete configurable XGBoost hyperparameter set used when "
@@ -701,18 +1141,55 @@ class XGBoostTrainingConfig(CommonTrainingConfig):
         ),
     )
 
+    # ------------------------------------------------------------------
+    # Fixed tuning
+    # ------------------------------------------------------------------
+
     hyperparameter_candidates: (
-        list[XGBoostHyperparameterSet]
+        list[
+            XGBoostHyperparameterSet
+        ]
         | None
     ) = Field(
         default=None,
         min_length=1,
         description=(
             "Complete configurable XGBoost hyperparameter candidates used "
-            "when tuning is enabled. No maximum candidate count is imposed. "
-            "Omit to use the internal default candidate list."
+            "when tuning is enabled with method='fixed'. Omit to use the "
+            "internal default candidate list."
         ),
     )
+
+    # ------------------------------------------------------------------
+    # Optuna tuning
+    # ------------------------------------------------------------------
+
+    optuna_search_space: (
+        XGBoostOptunaSearchSpace
+        | None
+    ) = Field(
+        default=None,
+        description=(
+            "Complete XGBoost hyperparameter search space used when tuning "
+            "is enabled with method='optuna'. Omit to use the internal "
+            "default Optuna search space."
+        ),
+    )
+
+    optuna: (
+        XGBoostOptunaConfig
+        | None
+    ) = Field(
+        default=None,
+        description=(
+            "Optional Optuna-specific controls. Omit to use internal "
+            "defaults for trial count and sampler seed."
+        ),
+    )
+
+    # ------------------------------------------------------------------
+    # Controls shared across tuning implementations
+    # ------------------------------------------------------------------
 
     tuning: XGBoostTuningConfig = Field(
         default_factory=XGBoostTuningConfig,
@@ -726,14 +1203,24 @@ class XGBoostTrainingConfig(CommonTrainingConfig):
         ),
     )
 
+    # ------------------------------------------------------------------
+    # Field validation
+    # ------------------------------------------------------------------
+
     @field_validator(
         "hyperparameters",
     )
     @classmethod
     def validate_hyperparameters(
         cls,
-        value: XGBoostHyperparameterSet | None,
-    ) -> XGBoostHyperparameterSet | None:
+        value: (
+            XGBoostHyperparameterSet
+            | None
+        ),
+    ) -> (
+        XGBoostHyperparameterSet
+        | None
+    ):
         """Validate an explicitly supplied single configuration."""
 
         if value is None:
@@ -750,9 +1237,19 @@ class XGBoostTrainingConfig(CommonTrainingConfig):
     @classmethod
     def validate_hyperparameter_candidates(
         cls,
-        value: list[XGBoostHyperparameterSet] | None,
-    ) -> list[XGBoostHyperparameterSet] | None:
-        """Validate every explicitly supplied complete tuning candidate."""
+        value: (
+            list[
+                XGBoostHyperparameterSet
+            ]
+            | None
+        ),
+    ) -> (
+        list[
+            XGBoostHyperparameterSet
+        ]
+        | None
+    ):
+        """Validate every explicitly supplied fixed tuning candidate."""
 
         if value is None:
             return None
@@ -764,37 +1261,136 @@ class XGBoostTrainingConfig(CommonTrainingConfig):
                     f"hyperparameter_candidates[{index}]"
                 ),
             )
-            for index, candidate in enumerate(
+            for (
+                index,
+                candidate,
+            ) in enumerate(
                 value
             )
         ]
 
-    @model_validator(mode="after")
+    @field_validator(
+        "optuna_search_space",
+    )
+    @classmethod
+    def validate_optuna_search_space(
+        cls,
+        value: (
+            XGBoostOptunaSearchSpace
+            | None
+        ),
+    ) -> (
+        XGBoostOptunaSearchSpace
+        | None
+    ):
+        """Validate an explicitly supplied complete Optuna search space."""
+
+        if value is None:
+            return None
+
+        return _validate_complete_optuna_search_space(
+            value,
+            field_name="optuna_search_space",
+        )
+
+    # ------------------------------------------------------------------
+    # Mode validation
+    # ------------------------------------------------------------------
+
+    @model_validator(
+        mode="after"
+    )
     def validate_hyperparameter_mode(
         self,
     ) -> XGBoostTrainingConfig:
-        """Validate list-vs-single input against the tuning switch."""
+        """
+        Enforce direct-vs-fixed-vs-Optuna input exclusivity.
 
-        if self.hyperparameter_tuning_enabled:
-            if self.hyperparameters is not None:
+        Missing fixed candidates or missing Optuna ranges are valid because
+        their respective internal defaults are resolved later.
+        """
+
+        # --------------------------------------------------------------
+        # Tuning disabled
+        # --------------------------------------------------------------
+
+        if not self.hyperparameter_tuning_enabled:
+            if self.hyperparameter_candidates is not None:
                 raise ValueError(
-                    "hyperparameters cannot be supplied when "
-                    "hyperparameter_tuning_enabled=True. Supply "
-                    "hyperparameter_candidates instead, or omit candidates "
-                    "to use the internal default candidate list."
+                    "hyperparameter_candidates cannot be supplied when "
+                    "hyperparameter_tuning_enabled=False."
+                )
+
+            if self.optuna_search_space is not None:
+                raise ValueError(
+                    "optuna_search_space cannot be supplied when "
+                    "hyperparameter_tuning_enabled=False."
+                )
+
+            if self.optuna is not None:
+                raise ValueError(
+                    "optuna settings cannot be supplied when "
+                    "hyperparameter_tuning_enabled=False."
                 )
 
             return self
 
-        if self.hyperparameter_candidates is not None:
+        # --------------------------------------------------------------
+        # All tuning modes
+        # --------------------------------------------------------------
+
+        if self.hyperparameters is not None:
             raise ValueError(
-                "hyperparameter_candidates cannot be supplied when "
-                "hyperparameter_tuning_enabled=False. Supply "
-                "hyperparameters instead, or omit them to use the internal "
-                "single default configuration."
+                "hyperparameters cannot be supplied when "
+                "hyperparameter_tuning_enabled=True."
             )
 
-        return self
+        # --------------------------------------------------------------
+        # Fixed tuning
+        # --------------------------------------------------------------
+
+        if (
+            self.hyperparameter_tuning_method
+            == "fixed"
+        ):
+            if self.optuna_search_space is not None:
+                raise ValueError(
+                    "optuna_search_space cannot be supplied when "
+                    "hyperparameter_tuning_method='fixed'."
+                )
+
+            if self.optuna is not None:
+                raise ValueError(
+                    "optuna settings cannot be supplied when "
+                    "hyperparameter_tuning_method='fixed'."
+                )
+
+            return self
+
+        # --------------------------------------------------------------
+        # Optuna tuning
+        # --------------------------------------------------------------
+
+        if (
+            self.hyperparameter_tuning_method
+            == "optuna"
+        ):
+            if self.hyperparameter_candidates is not None:
+                raise ValueError(
+                    "hyperparameter_candidates cannot be supplied when "
+                    "hyperparameter_tuning_method='optuna'."
+                )
+
+            return self
+
+        raise ValueError(
+            "Unsupported XGBoost hyperparameter_tuning_method: "
+            f"{self.hyperparameter_tuning_method}"
+        )
+
+    # ------------------------------------------------------------------
+    # Direct-training resolution
+    # ------------------------------------------------------------------
 
     def resolve_hyperparameters(
         self,
@@ -814,19 +1410,39 @@ class XGBoostTrainingConfig(CommonTrainingConfig):
         )
 
         return _validate_complete_hyperparameter_set(
-            dict(parameters),
+            dict(
+                parameters
+            ),
             field_name="resolved hyperparameters",
         )
 
+    # ------------------------------------------------------------------
+    # Fixed-tuning resolution
+    # ------------------------------------------------------------------
+
     def resolve_hyperparameter_candidates(
         self,
-    ) -> tuple[XGBoostHyperparameterSet, ...]:
-        """Return supplied candidates or the internal default candidate list."""
+    ) -> tuple[
+        XGBoostHyperparameterSet,
+        ...,
+    ]:
+        """
+        Return user-supplied or default fixed hyperparameter candidates.
+        """
 
         if not self.hyperparameter_tuning_enabled:
             raise ValueError(
                 "resolve_hyperparameter_candidates cannot be used while "
                 "hyperparameter tuning is disabled."
+            )
+
+        if (
+            self.hyperparameter_tuning_method
+            != "fixed"
+        ):
+            raise ValueError(
+                "resolve_hyperparameter_candidates requires "
+                "hyperparameter_tuning_method='fixed'."
             )
 
         candidates = (
@@ -837,29 +1453,102 @@ class XGBoostTrainingConfig(CommonTrainingConfig):
 
         if not candidates:
             raise ValueError(
-                "The resolved XGBoost hyperparameter candidate list "
+                "The resolved XGBoost fixed hyperparameter candidate list "
                 "cannot be empty."
             )
 
         return tuple(
             _validate_complete_hyperparameter_set(
-                dict(candidate),
+                dict(
+                    candidate
+                ),
                 field_name=(
                     f"resolved hyperparameter candidate[{index}]"
                 ),
             )
-            for index, candidate in enumerate(
+            for (
+                index,
+                candidate,
+            ) in enumerate(
                 candidates
             )
         )
 
+    # ------------------------------------------------------------------
+    # Optuna resolution
+    # ------------------------------------------------------------------
+
+    def resolve_optuna_search_space(
+        self,
+    ) -> XGBoostOptunaSearchSpace:
+        """
+        Return user-supplied or default Optuna hyperparameter ranges.
+        """
+
+        if not self.hyperparameter_tuning_enabled:
+            raise ValueError(
+                "resolve_optuna_search_space cannot be used while "
+                "hyperparameter tuning is disabled."
+            )
+
+        if (
+            self.hyperparameter_tuning_method
+            != "optuna"
+        ):
+            raise ValueError(
+                "resolve_optuna_search_space requires "
+                "hyperparameter_tuning_method='optuna'."
+            )
+
+        if self.optuna_search_space is not None:
+            return _validate_complete_optuna_search_space(
+                dict(
+                    self.optuna_search_space
+                ),
+                field_name="resolved Optuna search space",
+            )
+
+        return _parse_default_optuna_search_space()
+
+    def resolve_optuna_config(
+        self,
+    ) -> XGBoostOptunaConfig:
+        """Return user-supplied or default Optuna execution controls."""
+
+        if not self.hyperparameter_tuning_enabled:
+            raise ValueError(
+                "resolve_optuna_config cannot be used while "
+                "hyperparameter tuning is disabled."
+            )
+
+        if (
+            self.hyperparameter_tuning_method
+            != "optuna"
+        ):
+            raise ValueError(
+                "resolve_optuna_config requires "
+                "hyperparameter_tuning_method='optuna'."
+            )
+
+        return (
+            self.optuna
+            if self.optuna is not None
+            else XGBoostOptunaConfig()
+        )
+
+    # ------------------------------------------------------------------
+    # Other resolved contracts
+    # ------------------------------------------------------------------
+
     def resolve_split(
         self,
     ) -> ResolvedXGBoostSplitConfig:
-        """Return split percentages appropriate for the tuning mode."""
+        """Return split percentages appropriate for tuning ON/OFF."""
 
         return self.split.resolve_for_tuning(
-            tuning_enabled=self.hyperparameter_tuning_enabled,
+            tuning_enabled=(
+                self.hyperparameter_tuning_enabled
+            ),
         )
 
     def get_validation_rules(
@@ -873,6 +1562,9 @@ class XGBoostTrainingConfig(CommonTrainingConfig):
 __all__ = [
     "XGBoostHyperparameterSet",
     "XGBoostHyperparameterValue",
+    "XGBoostOptunaConfig",
+    "XGBoostOptunaParameterRange",
+    "XGBoostOptunaSearchSpace",
     "XGBoostCalibrationConfig",
     "XGBoostSplitConfig",
     "XGBoostTrainingConfig",

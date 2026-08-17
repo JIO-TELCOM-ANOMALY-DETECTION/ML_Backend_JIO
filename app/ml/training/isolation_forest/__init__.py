@@ -11,7 +11,8 @@ this package rather than reaching into individual implementation files.
 
 from .training import (
     IsolationForestTrainingResult,
-    train_isolation_forest_series,
+    train_isolation_forest_fixed_series,
+    train_isolation_forest_optuna_series,
 )
 from .testing import (
     IsolationForestTestingResult,
@@ -21,7 +22,8 @@ from .testing import (
 
 __all__ = [
     "IsolationForestTrainingResult",
-    "train_isolation_forest_series",
+    "train_isolation_forest_fixed_series",
+    "train_isolation_forest_optuna_series",
     "IsolationForestTestingResult",
     "test_isolation_forest_series",
 ]

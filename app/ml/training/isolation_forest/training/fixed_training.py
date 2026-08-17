@@ -1,9 +1,9 @@
 """
-Part D Isolation Forest training.
+Part D Isolation Forest direct/fixed-candidate training.
 
 Intended project location::
 
-    app/ml/training/isolation_forest/training.py
+    app/ml/training/isolation_forest/training/fixed_training.py
 
 This module owns the Isolation Forest fitting stage for ONE site/KPI series.
 

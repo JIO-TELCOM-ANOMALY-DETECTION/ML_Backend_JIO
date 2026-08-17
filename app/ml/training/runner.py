@@ -15,7 +15,7 @@ Flow
 4. reject when no valid series exist;
 5. call shared Part D validation;
 6. call loader.py to calculate chronological split boundaries;
-7. dispatch to the selected model implementation;
+7. dispatch to the selected model and fixed/Optuna training implementation;
 8. process every valid series independently;
 9. save each completed model through model_output.py;
 10. finalize aggregate JSON artifacts; and
@@ -50,7 +50,8 @@ from app.schemas.training.xgboost.xgboost import (
 
 from .isolation_forest import (
     test_isolation_forest_series,
-    train_isolation_forest_series,
+    train_isolation_forest_fixed_series,
+    train_isolation_forest_optuna_series,
 )
 from .loader import (
     SeriesIdentity,
@@ -74,7 +75,8 @@ from .validation import (
 from .xgboost import (
     calibrate_xgboost_series,
     test_xgboost_series,
-    train_xgboost_series,
+    train_xgboost_fixed_series,
+    train_xgboost_optuna_series,
 )
 
 
@@ -603,6 +605,24 @@ def _merge_row_counts(
     return merged
 
 
+def _use_optuna_training(
+    *,
+    training_config: TrainingConfig,
+) -> bool:
+    """
+    Return True only for an enabled Optuna tuning request.
+
+    Direct training always uses the fixed-training implementation, even though
+    the schema may still expose a default tuning-method value that is ignored
+    when hyperparameter tuning is disabled.
+    """
+
+    return bool(
+        training_config.hyperparameter_tuning_enabled
+        and training_config.hyperparameter_tuning_method == "optuna"
+    )
+
+
 def _run_xgboost_series(
     *,
     validation_result: TrainingValidationResult,
@@ -613,12 +633,22 @@ def _run_xgboost_series(
 ) -> SeriesModelArtifact:
     """Execute train -> residual calibration -> final test for one series."""
 
-    training_result = train_xgboost_series(
-        validation_result=validation_result,
-        split_plan=split_plan,
-        series_plan=series_plan,
+    if _use_optuna_training(
         training_config=training_config,
-    )
+    ):
+        training_result = train_xgboost_optuna_series(
+            validation_result=validation_result,
+            split_plan=split_plan,
+            series_plan=series_plan,
+            training_config=training_config,
+        )
+    else:
+        training_result = train_xgboost_fixed_series(
+            validation_result=validation_result,
+            split_plan=split_plan,
+            series_plan=series_plan,
+            training_config=training_config,
+        )
 
     calibration_result = calibrate_xgboost_series(
         trained_model=training_result.model,
@@ -699,14 +729,26 @@ def _run_isolation_forest_series(
 ) -> SeriesModelArtifact:
     """Execute train -> final test for one Isolation Forest series."""
 
-    training_result = (
-        train_isolation_forest_series(
-            validation_result=validation_result,
-            split_plan=split_plan,
-            series_plan=series_plan,
-            training_config=training_config,
+    if _use_optuna_training(
+        training_config=training_config,
+    ):
+        training_result = (
+            train_isolation_forest_optuna_series(
+                validation_result=validation_result,
+                split_plan=split_plan,
+                series_plan=series_plan,
+                training_config=training_config,
+            )
         )
-    )
+    else:
+        training_result = (
+            train_isolation_forest_fixed_series(
+                validation_result=validation_result,
+                split_plan=split_plan,
+                series_plan=series_plan,
+                training_config=training_config,
+            )
+        )
 
     testing_result = (
         test_isolation_forest_series(
