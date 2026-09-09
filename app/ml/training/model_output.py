@@ -55,12 +55,15 @@ import json
 import math
 from pathlib import Path
 import re
-import shutil
 from typing import Any, Mapping, TypeAlias
 
 import numpy as np
 from pydantic import BaseModel
 
+from app.services.file_service import (
+    remove_tree_with_retry,
+    rename_path_with_retry,
+)
 from app.schemas.training.isolation_forest.isolation_forest import (
     IsolationForestTrainingConfig,
 )
@@ -413,7 +416,7 @@ def abort_model_output(
     """Remove only the temporary staging output for a failed Part D run."""
 
     if session.staging_directory.exists():
-        shutil.rmtree(
+        remove_tree_with_retry(
             session.staging_directory
         )
 
@@ -974,8 +977,9 @@ def finalize_model_output(
             f"  {session.training_directory}"
         )
 
-    session.staging_directory.rename(
-        session.training_directory
+    rename_path_with_retry(
+        session.staging_directory,
+        session.training_directory,
     )
 
     model_files = tuple(

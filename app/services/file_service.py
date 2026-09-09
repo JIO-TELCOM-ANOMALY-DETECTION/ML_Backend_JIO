@@ -12,14 +12,29 @@ The run-directory service will supply those destination paths.
 
 import hashlib
 import json
+import logging
+import os
 import re
 import shutil
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 from uuid import uuid4
 
 import pandas as pd
+
+
+logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+
+# Windows can temporarily deny rename/replace/delete operations when another
+# process briefly opens a file or directory without delete-sharing enabled.
+# Keep retries deliberately narrow and bounded: only these known transient
+# Windows sharing/access conditions are retried.
+_TRANSIENT_WINDOWS_FILESYSTEM_ERRORS = frozenset({5, 32, 33})
+_FILESYSTEM_RETRY_DELAYS_SECONDS = (0.05, 0.10, 0.20, 0.40, 0.80)
 
 from app.core.config import settings
 from app.core.exceptions import (
@@ -33,6 +48,125 @@ from app.core.exceptions import (
 #     InputValidationError,
 #     settings,
 # )
+
+
+
+def _is_transient_windows_filesystem_error(error: OSError) -> bool:
+    """Return whether an OSError is a retryable Windows sharing/access error."""
+    return (
+        os.name == "nt"
+        and getattr(error, "winerror", None)
+        in _TRANSIENT_WINDOWS_FILESYSTEM_ERRORS
+    )
+
+
+def _run_filesystem_operation_with_retry(
+    operation: Callable[[], _T],
+    *,
+    operation_name: str,
+    source_path: Path | None = None,
+    destination_path: Path | None = None,
+) -> _T:
+    """
+    Execute one filesystem mutation with bounded retry for transient Windows locks.
+
+    Non-Windows errors and Windows errors outside the small retryable set are
+    raised immediately. If all retries are exhausted, the original final
+    OSError is re-raised so existing caller-level exception contracts remain
+    unchanged.
+    """
+    retry_number = 0
+
+    while True:
+        try:
+            return operation()
+        except OSError as error:
+            if not _is_transient_windows_filesystem_error(error):
+                raise
+
+            if retry_number >= len(_FILESYSTEM_RETRY_DELAYS_SECONDS):
+                raise
+
+            delay_seconds = _FILESYSTEM_RETRY_DELAYS_SECONDS[retry_number]
+            retry_number += 1
+
+            logger.warning(
+                "Transient Windows filesystem error during %s; retry %d/%d "
+                "in %.2fs (winerror=%s, source=%s, destination=%s): %s",
+                operation_name,
+                retry_number,
+                len(_FILESYSTEM_RETRY_DELAYS_SECONDS),
+                delay_seconds,
+                getattr(error, "winerror", None),
+                source_path,
+                destination_path,
+                error,
+            )
+
+            time.sleep(delay_seconds)
+
+
+def rename_path_with_retry(
+    source_path: str | Path,
+    destination_path: str | Path,
+) -> Path:
+    """
+    Rename a file or directory while tolerating short-lived Windows locks.
+
+    This preserves Path.rename() semantics; it does not silently overwrite a
+    destination that the underlying platform would reject.
+    """
+    source = Path(source_path).expanduser()
+    destination = Path(destination_path).expanduser()
+
+    return _run_filesystem_operation_with_retry(
+        lambda: source.rename(destination),
+        operation_name="rename_path",
+        source_path=source,
+        destination_path=destination,
+    )
+
+
+def replace_path_with_retry(
+    source_path: str | Path,
+    destination_path: str | Path,
+) -> Path:
+    """
+    Replace/move a file or directory while tolerating short-lived Windows locks.
+
+    This preserves Path.replace() semantics and re-raises the final OSError when
+    a transient lock does not clear within the bounded retry window.
+    """
+    source = Path(source_path).expanduser()
+    destination = Path(destination_path).expanduser()
+
+    return _run_filesystem_operation_with_retry(
+        lambda: source.replace(destination),
+        operation_name="replace_path",
+        source_path=source,
+        destination_path=destination,
+    )
+
+
+def remove_tree_with_retry(
+    directory_path: str | Path,
+) -> None:
+    """Remove a directory tree with bounded retry for transient Windows locks."""
+    directory = Path(directory_path).expanduser()
+
+    if not directory.exists():
+        return
+
+    def _remove() -> None:
+        if not directory.exists():
+            return
+        shutil.rmtree(directory)
+
+    _run_filesystem_operation_with_retry(
+        _remove,
+        operation_name="remove_tree",
+        source_path=directory,
+    )
 
 
 def ensure_directory(directory_path: str | Path) -> Path:
@@ -796,8 +930,9 @@ def write_json_file(
                 default=str,
             )
 
-        temporary_path.replace(
-            destination_path
+        replace_path_with_retry(
+            temporary_path,
+            destination_path,
         )
 
     except (OSError, TypeError, ValueError) as error:

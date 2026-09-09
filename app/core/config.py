@@ -2,8 +2,11 @@
 Central configuration for the telecom anomaly detection backend.
 
 This module stores project-wide settings such as API metadata, directory
-locations, input-file restrictions, and logging defaults. Settings can be
-overridden through environment variables or the project's .env file.
+locations, input-file restrictions, logging defaults, and infrastructure
+settings used by workflow/run-management services.
+
+Settings can be overridden through environment variables or the project's
+.env file.
 """
 
 from pathlib import Path
@@ -29,8 +32,9 @@ class Settings(BaseSettings):
     """
     Store and validate shared backend configuration.
 
-    This class contains settings used across the API, preprocessing pipeline,
-    machine-learning modules, reporting components, agents, and services.
+    This class contains settings used across the API, workflow/run-management
+    layer, preprocessing pipeline, machine-learning modules, reporting
+    components, agents, and services.
 
     Values can be overridden using environment variables or the root .env file.
     For example:
@@ -38,6 +42,8 @@ class Settings(BaseSettings):
         PROJECT_ROOT=C:/path/to/telecom_anomaly_backend
         LOG_LEVEL=DEBUG
         MAX_INPUT_FILE_SIZE_GB=5
+        RUN_REGISTRY_BACKEND=local_json
+        RUN_REGISTRY_ROOT=C:/path/to/runtime_registry
     """
 
     # -----------------------------------------------------------------------
@@ -84,12 +90,57 @@ class Settings(BaseSettings):
     default_file_encoding: str = "utf-8"
 
     # -----------------------------------------------------------------------
+    # WORKFLOW / RUN-MANAGEMENT SETTINGS
+    # -----------------------------------------------------------------------
+    run_registry_backend: str = Field(
+        default="local_json",
+        description=(
+            "Run-registry implementation used by the run-management layer. "
+            "V1 supports the local_json backend."
+        ),
+    )
+
+    run_registry_root: Path | None = Field(
+        default=None,
+        description=(
+            "Optional directory used by the run registry. When omitted, "
+            "<project_root>/run_registry is used."
+        ),
+    )
+
+    run_registry_filename: str = Field(
+        default="runs.json",
+        min_length=1,
+        description="Filename used by the V1 local JSON run registry.",
+    )
+
+    run_lock_timeout_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        description=(
+            "Maximum time a run-management operation may wait to acquire "
+            "a run-level lock."
+        ),
+    )
+
+    workflow_schema_version: str = Field(
+        default="1.0",
+        pattern=r"^\d+\.\d+$",
+        description="Version of the workflow/run-management contract.",
+    )
+
+    run_manifest_version: str = Field(
+        default="2.0",
+        pattern=r"^\d+\.\d+$",
+        description="Version of the persisted run-manifest structure.",
+    )
+
+    # -----------------------------------------------------------------------
     # LOGGING SETTINGS
     # -----------------------------------------------------------------------
     log_level: str = "INFO"
 
-    # all the 5 lines representing different parts of the log will be joined 
-    # and saved as a singular line in the final log
+    # All five format components are joined and written as one log line.
     log_format: str = (
         "%(asctime)s | "
         "%(levelname)s | "
@@ -101,8 +152,9 @@ class Settings(BaseSettings):
     log_date_format: str = "%Y-%m-%d %H:%M:%S"
 
     log_file_names: dict[str, str] = Field(
-        default_factory=lambda: {            # default_factory used instead of default for future change and flexibitlity
+        default_factory=lambda: {
             "pipeline": "pipeline.log",
+            "run_management": "run_management.log",
             "preprocessing": "preprocessing.log",
             "xgboost": "xgboost.log",
             "isolation_forest": "isolation_forest.log",
@@ -116,9 +168,9 @@ class Settings(BaseSettings):
     # -----------------------------------------------------------------------
     # VALIDATION
     # -----------------------------------------------------------------------
-    @field_validator("project_root", mode="before") # it's a decorator and the function tells what variable to validate and when, changes the variabel value if anything in env before pydantic performs other things like conversion of str to path on it.
-    @classmethod                                    # this decorator makes this function a method of the class
-    def normalise_project_root(cls, value: str | Path) -> Path: # a class method receives the class itself as it's first parameter; it is working with cls(class) instead of self(an already created object) because a object might not be initated yet.
+    @field_validator("project_root", mode="before")
+    @classmethod
+    def normalise_project_root(cls, value: str | Path) -> Path:
         """
         Validate and normalise the configured project root path.
 
@@ -129,6 +181,77 @@ class Settings(BaseSettings):
             An expanded and resolved Path object.
         """
         return Path(value).expanduser().resolve()
+
+    @field_validator("run_registry_root", mode="before")
+    @classmethod
+    def normalise_run_registry_root(
+        cls,
+        value: str | Path | None,
+    ) -> Path | None:
+        """
+        Normalise an explicitly configured run-registry root.
+
+        A null value intentionally means that the registry should use its
+        project-relative default location.
+
+        Args:
+            value: Optional registry-root path.
+
+        Returns:
+            A resolved Path when supplied, otherwise None.
+        """
+        if value is None:
+            return None
+
+        return Path(value).expanduser().resolve()
+
+    @field_validator("run_registry_backend")
+    @classmethod
+    def validate_run_registry_backend(cls, value: str) -> str:
+        """
+        Validate the configured run-registry backend.
+
+        V1 intentionally supports only the local JSON implementation. Future
+        registry implementations can be added here without changing workflow
+        or API contracts.
+        """
+        normalised_value = value.lower().strip()
+        supported_backends = {"local_json"}
+
+        if normalised_value not in supported_backends:
+            raise ValueError(
+                "RUN_REGISTRY_BACKEND must currently be one of: "
+                f"{', '.join(sorted(supported_backends))}."
+            )
+
+        return normalised_value
+
+    @field_validator("run_registry_filename")
+    @classmethod
+    def validate_run_registry_filename(cls, value: str) -> str:
+        """
+        Validate the local JSON registry filename.
+
+        The setting must be a filename rather than an arbitrary path so that
+        the registry root remains the sole owner of registry placement.
+        """
+        normalised_value = value.strip()
+
+        if not normalised_value:
+            raise ValueError("RUN_REGISTRY_FILENAME cannot be empty.")
+
+        if Path(normalised_value).name != normalised_value:
+            raise ValueError(
+                "RUN_REGISTRY_FILENAME must contain a filename only, "
+                "not a directory path."
+            )
+
+        if Path(normalised_value).suffix.lower() != ".json":
+            raise ValueError(
+                "RUN_REGISTRY_FILENAME must use the .json extension."
+            )
+
+        return normalised_value
 
     @field_validator("log_level")
     @classmethod
@@ -166,7 +289,7 @@ class Settings(BaseSettings):
     # -----------------------------------------------------------------------
     # DERIVED DIRECTORY PATHS
     # -----------------------------------------------------------------------
-    @property # allows use to call it as app_directory instead of app_directory(), bascically it let's us call it like an attribute, this is not a class method this is a object method which is for every object
+    @property
     def app_directory(self) -> Path:
         """
         Return the main application package directory.
@@ -235,6 +358,26 @@ class Settings(BaseSettings):
             Path to the model metadata directory.
         """
         return self.model_artifacts_directory / "model_metadata"
+
+    @property
+    def run_registry_directory(self) -> Path:
+        """
+        Return the directory containing run-registry persistence.
+
+        An explicitly configured RUN_REGISTRY_ROOT takes precedence.
+        Otherwise the registry is stored below the project root.
+        """
+        if self.run_registry_root is not None:
+            return self.run_registry_root
+
+        return self.project_root / "run_registry"
+
+    @property
+    def run_registry_file(self) -> Path:
+        """
+        Return the V1 local JSON run-registry file path.
+        """
+        return self.run_registry_directory / self.run_registry_filename
 
     @property
     def max_input_file_size_bytes(self) -> int:
@@ -322,6 +465,7 @@ class Settings(BaseSettings):
             self.xgboost_artifacts_directory,
             self.isolation_forest_artifacts_directory,
             self.model_metadata_directory,
+            self.run_registry_directory,
         )
 
         for directory in directories:

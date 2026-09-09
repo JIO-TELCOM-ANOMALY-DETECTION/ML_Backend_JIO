@@ -1,12 +1,14 @@
 """
 Pipeline-run directory management for the telecom anomaly backend.
 
-This module generates run identifiers, builds the standard directory paths
-for each pipeline run, creates the required folders, validates existing run
-directories, and lists previously created runs.
+This module generates run identifiers, builds the standard top-level
+directory paths for each pipeline run, creates the required run folders,
+validates existing run directories, and lists previously created runs.
 
-The service manages directory structure only. It does not copy input files,
-write manifests, execute pipeline stages, or configure log handlers.
+The service manages run-level directory structure only. It does not create
+attempt/stage/execution folders, copy input files, write manifests, resolve
+artifacts, execute workflows, or configure log handlers. Those higher-level
+responsibilities belong to the run-management and workflow layers.
 """
 
 import re
@@ -18,15 +20,24 @@ from app.core.config import settings
 from app.core.exceptions import RunDirectoryError
 
 
-# Every run receives these standard subdirectories under runs/<run_id>/.
+# ---------------------------------------------------------------------------
+# STANDARD RUN-LEVEL DIRECTORY STRUCTURE
+# ---------------------------------------------------------------------------
+# Every run receives these stable top-level subdirectories under:
+#
+#     runs/<run_id>/
+#
+# Attempt-specific training data and stage outputs will later live below
+# "attempts/". Part-E saved state and invocation records will live below
+# "inference/". Their deeper structures are intentionally not owned here.
 RUN_SUBDIRECTORIES: dict[str, str] = {
-    "input": "input",
-    "preprocessing": "preprocessing",
-    "models": "models",
+    "attempts": "attempts",
+    "inference": "inference",
     "reports": "reports",
     "agents": "agents",
     "temporary": "temporary",
 }
+
 
 # Run IDs may contain letters, numbers, underscores, hyphens, and full stops.
 # The first character must be a letter or number.
@@ -39,7 +50,7 @@ def generate_run_id(
     prefix: str = "run",
 ) -> str:
     """
-    Generate a unique identifier for a new pipeline run.
+    Generate a unique identifier for a new backend run.
 
     The identifier contains a readable UTC timestamp and a short random UUID
     section to reduce the chance of two runs receiving the same ID.
@@ -93,7 +104,7 @@ def validate_run_id(
     run_id: str,
 ) -> str:
     """
-    Validate and normalise a pipeline run identifier.
+    Validate and normalise a backend run identifier.
 
     Validation prevents empty values, directory traversal, path separators,
     and unsupported filename characters.
@@ -150,10 +161,10 @@ def get_run_directory(
     run_id: str,
 ) -> Path:
     """
-    Build the root directory path for a pipeline run.
+    Build the root directory path for a backend run.
 
     Args:
-        run_id: Unique identifier assigned to the pipeline run.
+        run_id: Unique identifier assigned to the run.
 
     Returns:
         Path in the form runs/<run_id>.
@@ -171,10 +182,10 @@ def get_run_log_directory(
     run_id: str,
 ) -> Path:
     """
-    Build the separate logging directory path for a pipeline run.
+    Build the separate logging directory path for a backend run.
 
     Args:
-        run_id: Unique identifier assigned to the pipeline run.
+        run_id: Unique identifier assigned to the run.
 
     Returns:
         Path in the form logs/<run_id>.
@@ -192,16 +203,27 @@ def get_run_paths(
     run_id: str,
 ) -> dict[str, Path]:
     """
-    Build all standard paths associated with a pipeline run.
+    Build all standard top-level paths associated with a backend run.
 
     This function only calculates paths. It does not create any directories.
 
+    The returned mapping contains:
+
+        run
+        logs
+        manifest
+        attempts
+        inference
+        reports
+        agents
+        temporary
+
     Args:
-        run_id: Unique identifier assigned to the pipeline run.
+        run_id: Unique identifier assigned to the run.
 
     Returns:
         Dictionary containing the run root, log directory, manifest path,
-        and all standard run subdirectories.
+        and every configured top-level run subdirectory.
     """
     validated_run_id = validate_run_id(
         run_id
@@ -238,12 +260,12 @@ def get_run_subdirectory(
     directory_key: str,
 ) -> Path:
     """
-    Return one configured subdirectory path for a pipeline run.
+    Return one configured top-level subdirectory path for a backend run.
 
     Args:
-        run_id: Unique identifier assigned to the pipeline run.
-        directory_key: Configured directory key such as input, models,
-            preprocessing, or reports.
+        run_id: Unique identifier assigned to the run.
+        directory_key: Configured directory key such as attempts, inference,
+            reports, agents, or temporary.
 
     Returns:
         Requested run-specific directory path.
@@ -280,17 +302,21 @@ def create_run_directories(
     exist_ok: bool = False,
 ) -> dict[str, str | Path]:
     """
-    Create the complete directory structure for a pipeline run.
+    Create the standard top-level directory structure for a backend run.
 
-    When no run ID is provided, a new unique run ID is generated. The run
-    output folders and the separate run logging folder are then created.
+    When no run ID is provided, a new unique run ID is generated. The stable
+    run-level folders and the separate run logging folder are then created.
+
+    This service intentionally does not create attempt, stage, execution, or
+    inference-invocation child folders. Those will be created later by the
+    run-management layer according to the active lifecycle.
 
     Args:
         run_id: Optional externally supplied run identifier.
         exist_ok: Whether an already existing run directory may be reused.
 
     Returns:
-        Dictionary containing every standard path for the pipeline run.
+        Dictionary containing the run ID and every standard top-level path.
 
     Raises:
         RunDirectoryError: If the directories already exist unexpectedly or
@@ -311,7 +337,7 @@ def create_run_directories(
 
     if run_directory.exists() and not exist_ok:
         raise RunDirectoryError(
-            "A directory already exists for this pipeline run.",
+            "A directory already exists for this backend run.",
             error_code="RUN_DIRECTORY_ALREADY_EXISTS",
             details={
                 "run_id": final_run_id,
@@ -346,7 +372,7 @@ def create_run_directories(
 
     except OSError as error:
         raise RunDirectoryError(
-            "Unable to create the pipeline-run directories.",
+            "Unable to create the backend run directories.",
             error_code="RUN_DIRECTORY_CREATION_FAILED",
             details={
                 "run_id": final_run_id,
@@ -370,10 +396,10 @@ def validate_run_directory(
     run_id: str,
 ) -> Path:
     """
-    Validate that a pipeline run directory already exists.
+    Validate that a backend run directory already exists.
 
     Args:
-        run_id: Unique identifier assigned to the pipeline run.
+        run_id: Unique identifier assigned to the run.
 
     Returns:
         Existing run-directory path.
@@ -388,7 +414,7 @@ def validate_run_directory(
 
     if not run_directory.exists():
         raise RunDirectoryError(
-            "The requested pipeline-run directory does not exist.",
+            "The requested backend run directory does not exist.",
             error_code="RUN_DIRECTORY_NOT_FOUND",
             details={
                 "run_id": run_id,
@@ -400,7 +426,7 @@ def validate_run_directory(
 
     if not run_directory.is_dir():
         raise RunDirectoryError(
-            "The pipeline-run path is not a directory.",
+            "The backend run path is not a directory.",
             error_code="RUN_PATH_IS_NOT_DIRECTORY",
             details={
                 "run_id": run_id,
@@ -417,10 +443,10 @@ def run_directory_exists(
     run_id: str,
 ) -> bool:
     """
-    Check whether a valid pipeline-run directory exists.
+    Check whether a valid backend run directory exists.
 
     Args:
-        run_id: Unique identifier assigned to the pipeline run.
+        run_id: Unique identifier assigned to the run.
 
     Returns:
         True when the run path exists as a directory; otherwise False.
@@ -437,7 +463,11 @@ def run_directory_exists(
 
 def list_run_ids() -> list[str]:
     """
-    List the identifiers of all existing pipeline-run directories.
+    List the identifiers of all existing backend run directories.
+
+    This filesystem listing is a low-level service operation. Once the run
+    registry is introduced, user-facing run lookup should prefer the registry
+    rather than treating directory discovery as the primary source of truth.
 
     Returns:
         Alphabetically sorted list of valid run-directory names.
@@ -466,7 +496,7 @@ def list_run_ids() -> list[str]:
 
     except OSError as error:
         raise RunDirectoryError(
-            "Unable to inspect the pipeline runs directory.",
+            "Unable to inspect the backend runs directory.",
             error_code="RUN_DIRECTORY_LIST_FAILED",
             details={
                 "runs_directory": str(

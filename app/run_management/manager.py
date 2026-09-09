@@ -17,7 +17,6 @@ Part E invocation registration is now failure-aware:
 
 from __future__ import annotations
 
-import shutil
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from datetime import datetime, timezone
@@ -35,6 +34,8 @@ from app.core.exceptions import (
 from app.services.file_service import (
     copy_input_file,
     ensure_directory,
+    remove_tree_with_retry,
+    replace_path_with_retry,
     write_json_file,
 )
 from app.services.run_directory_service import (
@@ -466,7 +467,7 @@ class RunManager:
                     path = Path(created_paths[key])
                     try:
                         if path.exists():
-                            shutil.rmtree(path)
+                            remove_tree_with_retry(path)
                     except OSError:
                         pass
             raise
@@ -643,7 +644,7 @@ class RunManager:
                 if not manifest_created:
                     try:
                         if paths["attempt"].exists():
-                            shutil.rmtree(paths["attempt"])
+                            remove_tree_with_retry(paths["attempt"])
                     except OSError:
                         pass
                 raise
@@ -946,7 +947,7 @@ class RunManager:
                 else:
                     try:
                         if paths["execution"].exists():
-                            shutil.rmtree(paths["execution"])
+                            remove_tree_with_retry(paths["execution"])
                     except OSError:
                         pass
                 raise
@@ -1082,7 +1083,10 @@ class RunManager:
         ensure_directory(stable.parent)
 
         try:
-            staging.replace(stable)
+            replace_path_with_retry(
+                staging,
+                stable,
+            )
         except OSError as error:
             raise ArtifactResolutionError(
                 "Unable to publish the completed inference state.",
@@ -1229,7 +1233,10 @@ class RunManager:
                             published_state.exists()
                             and not staging_state.exists()
                         ):
-                            published_state.replace(staging_state)
+                            replace_path_with_retry(
+                                published_state,
+                                staging_state,
+                            )
                     except OSError:
                         pass
                 raise
@@ -1393,7 +1400,7 @@ class RunManager:
         except Exception:
             try:
                 if paths["request"].exists():
-                    shutil.rmtree(paths["request"])
+                    remove_tree_with_retry(paths["request"])
             except OSError:
                 pass
             raise

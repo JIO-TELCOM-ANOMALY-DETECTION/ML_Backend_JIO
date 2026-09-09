@@ -8,6 +8,8 @@ classes, and run-specific logging utilities used throughout the backend.
 from app.core.config import Settings, settings
 from app.core.exceptions import (
     AgentExecutionError,
+    ArtifactResolutionError,
+    AttemptNotFoundError,
     ConfigurationError,
     EmailDeliveryError,
     FileProcessingError,
@@ -19,7 +21,13 @@ from app.core.exceptions import (
     ReportingError,
     ResultCombinationError,
     RunDirectoryError,
+    RunLockError,
+    RunManagementError,
     RunManifestError,
+    RunNotFoundError,
+    RunRegistryError,
+    StageConflictError,
+    StagePrerequisiteError,
     TelecomBackendError,
 )
 from app.core.logging_config import (
@@ -38,6 +46,14 @@ __all__ = [
     "FileProcessingError",
     "RunDirectoryError",
     "RunManifestError",
+    "RunManagementError",
+    "RunNotFoundError",
+    "AttemptNotFoundError",
+    "StagePrerequisiteError",
+    "StageConflictError",
+    "ArtifactResolutionError",
+    "RunRegistryError",
+    "RunLockError",
     "PipelineExecutionError",
     "PreprocessingError",
     "ModelExecutionError",

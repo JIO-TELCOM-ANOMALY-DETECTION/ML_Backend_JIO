@@ -57,7 +57,7 @@ class TelecomBackendError(Exception):
         Convert the exception into a structured dictionary.
 
         This structure can later be used by FastAPI exception handlers,
-        pipeline manifests, and logging functions.
+        workflow manifests, run-management records, and logging functions.
 
         Returns:
             Dictionary containing the error type, message, code, and details.
@@ -127,12 +127,105 @@ class RunManifestError(TelecomBackendError):
     """
 
 
+# ---------------------------------------------------------------------------
+# RUN-MANAGEMENT / WORKFLOW-LIFECYCLE ERRORS
+# ---------------------------------------------------------------------------
+
+
+class RunManagementError(TelecomBackendError):
+    """
+    Base exception for failures in the run-management layer.
+
+    This groups errors related to run identity, attempts, execution lineage,
+    registry access, artifact resolution, and run-level coordination.
+    """
+
+
+class RunNotFoundError(RunManagementError):
+    """
+    Raised when a requested run identifier cannot be resolved.
+
+    Examples:
+        - Unknown run_id
+        - Registry entry points to a run that no longer exists
+    """
+
+
+class AttemptNotFoundError(RunManagementError):
+    """
+    Raised when a requested attempt cannot be found inside a known run.
+
+    Examples:
+        - Unknown attempt_id
+        - Attempt metadata missing from the run manifest
+    """
+
+
+class StagePrerequisiteError(RunManagementError):
+    """
+    Raised when a workflow stage is requested before its prerequisite exists.
+
+    Examples:
+        - Part B requested before Part A completed
+        - Part C requested before Part B completed
+        - Part D requested before Part C completed
+        - Inference requested before an inference-ready training attempt exists
+    """
+
+
+class StageConflictError(RunManagementError):
+    """
+    Raised when a request would violate the immutable attempt lineage.
+
+    Examples:
+        - Trying to change Part B after Part B already completed
+        - Trying to replace a completed upstream stage inside the same attempt
+        - Trying to run a stage while a conflicting execution is active
+    """
+
+
+class ArtifactResolutionError(RunManagementError):
+    """
+    Raised when the authoritative artifact required by a workflow cannot be
+    resolved safely.
+
+    Examples:
+        - Completed stage has no registered result snapshot
+        - Active execution points to a missing output
+        - Required upstream artifact path is invalid or unavailable
+    """
+
+
+class RunRegistryError(RunManagementError):
+    """
+    Raised when the run registry cannot be read or updated.
+
+    Examples:
+        - Invalid local registry JSON
+        - Registry persistence failure
+        - Inconsistent run-to-directory mapping
+    """
+
+
+class RunLockError(RunManagementError):
+    """
+    Raised when a run-level lock cannot be acquired or released safely.
+
+    Examples:
+        - Another mutable operation already owns the run
+        - Lock acquisition exceeds the configured timeout
+        - Lock metadata is inconsistent
+    """
+
+
 class PipelineExecutionError(TelecomBackendError):
     """
     Raised when the overall pipeline execution fails.
 
-    This exception should represent a workflow-level failure, especially when
-    the pipeline orchestrator cannot complete the requested sequence.
+    This exception should represent a workflow-level execution failure,
+    especially when an orchestrator cannot complete the requested sequence.
+    Run-management conflicts and prerequisite failures use the more specific
+    run-management exceptions above.
     """
 
 

@@ -2,8 +2,8 @@
 Shared services for the telecom anomaly detection backend.
 
 This package exposes the run-directory, file-handling, and run-manifest
-utilities used by workflows, API routes, preprocessing modules, model
-runners, and reporting components.
+utilities used by workflows, API routes, run-management components,
+preprocessing modules, model runners, and reporting components.
 """
 
 # ---------------------------------------------------------------------------
@@ -48,24 +48,44 @@ from app.services.file_service import (
 from app.services.run_manifest_service import (
     MANIFEST_FILENAME,
     MANIFEST_VERSION,
+    RECORD_ID_PATTERN,
+    TRAINING_STAGE_NAMES,
+    VALID_ATTEMPT_STATUSES,
+    VALID_EXECUTION_STATUSES,
+    VALID_INFERENCE_INVOCATION_STATUSES,
     VALID_RUN_STATUSES,
     VALID_STAGE_STATUSES,
+    WORKFLOW_SCHEMA_VERSION,
     append_manifest_event,
-    complete_pipeline_stage,
+    cancel_stage_execution,
+    clear_active_inference_attempt,
+    complete_inference_invocation,
+    complete_stage_execution,
     convert_exception_to_record,
+    create_attempt_record,
     create_run_manifest,
-    fail_pipeline_stage,
+    fail_inference_invocation,
+    fail_stage_execution,
     get_current_utc_timestamp,
     get_manifest_path,
     load_run_manifest,
     record_output_file,
     save_run_manifest,
+    set_active_inference_attempt,
+    set_attempt_status,
     set_run_status,
-    skip_pipeline_stage,
-    start_pipeline_stage,
+    start_inference_invocation,
+    start_stage_execution,
+    update_attempt_summary,
+    update_run_metadata,
     update_run_summary,
+    validate_attempt_status,
+    validate_execution_status,
+    validate_inference_invocation_status,
     validate_manifest_structure,
+    validate_record_id,
     validate_run_status,
+    validate_stage_name,
     validate_stage_status,
 )
 
@@ -99,26 +119,58 @@ __all__ = [
     "read_json_file",
     "write_json_file",
 
-    # Manifest constants and functions
+    # Manifest constants
     "MANIFEST_FILENAME",
     "MANIFEST_VERSION",
+    "WORKFLOW_SCHEMA_VERSION",
+    "TRAINING_STAGE_NAMES",
     "VALID_RUN_STATUSES",
+    "VALID_ATTEMPT_STATUSES",
     "VALID_STAGE_STATUSES",
+    "VALID_EXECUTION_STATUSES",
+    "VALID_INFERENCE_INVOCATION_STATUSES",
+    "RECORD_ID_PATTERN",
+
+    # Manifest validation / general helpers
     "get_current_utc_timestamp",
     "get_manifest_path",
+    "validate_record_id",
+    "validate_stage_name",
     "validate_run_status",
+    "validate_attempt_status",
     "validate_stage_status",
+    "validate_execution_status",
+    "validate_inference_invocation_status",
     "validate_manifest_structure",
+    "convert_exception_to_record",
     "append_manifest_event",
+
+    # Run-level manifest operations
     "create_run_manifest",
     "load_run_manifest",
     "save_run_manifest",
     "set_run_status",
-    "start_pipeline_stage",
-    "complete_pipeline_stage",
-    "skip_pipeline_stage",
-    "convert_exception_to_record",
-    "fail_pipeline_stage",
-    "record_output_file",
+    "update_run_metadata",
     "update_run_summary",
+
+    # Attempt operations
+    "create_attempt_record",
+    "set_attempt_status",
+    "update_attempt_summary",
+
+    # Stage-execution operations
+    "start_stage_execution",
+    "complete_stage_execution",
+    "fail_stage_execution",
+    "cancel_stage_execution",
+    "record_output_file",
+
+    # Inference-ready pointer
+    "set_active_inference_attempt",
+    "clear_active_inference_attempt",
+
+    # Inference-invocation operations
+    "start_inference_invocation",
+    "complete_inference_invocation",
+    "fail_inference_invocation",
 ]
