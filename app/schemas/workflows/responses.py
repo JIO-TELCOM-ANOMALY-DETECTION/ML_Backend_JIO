@@ -108,6 +108,15 @@ class TrainingPipelineResponse(WorkflowSchemaModel):
     error: WorkflowErrorDetail | None = None
 
 
+class MasterPipelineRequestAcknowledgementReturnResponse(WorkflowSchemaModel):
+    """Immediate response for an accepted background master-pipeline run."""
+
+    run_id: RunId
+    attempt_id: AttemptId | None = None
+    status: Literal["created"] = "created"
+    message: str = Field(min_length=1)
+
+
 class InferenceWorkflowResponse(WorkflowSchemaModel):
     """Response for one pure Part E invocation."""
 
@@ -154,6 +163,7 @@ __all__ = [
     "StageExecutionSummary",
     "StandaloneStageResponse",
     "TrainingPipelineResponse",
+    "MasterPipelineRequestAcknowledgementReturnResponse",
     "InferenceWorkflowResponse",
     "WorkflowErrorResponse",
 ]

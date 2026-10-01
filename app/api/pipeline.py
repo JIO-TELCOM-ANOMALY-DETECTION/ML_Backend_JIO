@@ -53,6 +53,7 @@ from app.core import (
     TelecomBackendError,
 )
 from app.schemas.workflows import (
+    MasterPipelineRequestAcknowledgementReturnResponse,
     TrainingPipelineRequest,
     TrainingPipelineResponse,
 )
@@ -62,6 +63,8 @@ from app.services.file_service import (
 from app.workflows import (
     run_training_pipeline,
 )
+
+from app.services.background_runner import get_background_runner
 
 from .dependencies import (
     RunManagerDependency,
@@ -327,6 +330,63 @@ def run_pipeline(
         logger=logger,
     )
 
+
+def _run_accepted_master_pipeline(
+    *,
+    request: TrainingPipelineRequest,
+    manager: Any,
+) -> None:
+    """Enter the existing master pipeline exactly once in the worker."""
+    logger = get_workflow_logger(request.run_id, component_name="pipeline")
+    run_training_pipeline(request=request, manager=manager, logger=logger)
+
+
+@router.post(
+    "/master-pipeline-request-acknowledgement-return",
+    response_model=MasterPipelineRequestAcknowledgementReturnResponse,
+    summary="Accept the full master pipeline for background execution",
+)
+def acknowledge_master_pipeline_request(
+    request: TrainingPipelineRequest,
+    manager: RunManagerDependency,
+) -> MasterPipelineRequestAcknowledgementReturnResponse:
+    """Create only a run, submit the unchanged master request, and return."""
+    if request.run_id is not None:
+        raise InputValidationError(
+            "This endpoint always creates a new run and does not accept run_id.",
+            error_code="API_RUN_ID_NOT_ALLOWED",
+            details={},
+        )
+
+    _validate_external_dataset_file(request)
+    run_context = manager.create_run(run_metadata=request.run_metadata)
+    request_with_run_id = request.model_copy(
+        deep=True,
+        update={"run_id": run_context.run_id},
+    )
+
+    try:
+        get_background_runner().submit(
+            _run_accepted_master_pipeline,
+            request=request_with_run_id,
+            manager=manager,
+        )
+    except Exception as error:
+        logger = get_workflow_logger(run_context.run_id, component_name="pipeline")
+        logger.exception(
+            "Background master-pipeline submission failed for run %s.",
+            run_context.run_id,
+        )
+        raise RuntimeError(
+            "The run was created, but background execution could not be accepted."
+        ) from error
+
+    return MasterPipelineRequestAcknowledgementReturnResponse(
+        run_id=run_context.run_id,
+        attempt_id=None,
+        status="created",
+        message="Master pipeline request accepted for background execution.",
+    )
 
 __all__ = [
     "router",

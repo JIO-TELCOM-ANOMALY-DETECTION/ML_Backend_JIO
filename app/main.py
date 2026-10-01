@@ -13,6 +13,7 @@ boundary.
 from __future__ import annotations
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
     eda_router,
@@ -26,12 +27,24 @@ from app.api import (
     training_router,
 )
 from app.core import settings
+from app.services.background_runner import get_background_runner
 
 
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     debug=settings.debug,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -78,6 +91,11 @@ app.include_router(
     inference_router
 )
 
+
+@app.on_event("shutdown")
+def shutdown_background_runner() -> None:
+    """Wait for accepted in-process work before application shutdown."""
+    get_background_runner().shutdown()
 
 __all__ = [
     "app",

@@ -32,6 +32,7 @@ from .pipeline import (
 )
 from .responses import (
     InferenceWorkflowResponse,
+    MasterPipelineRequestAcknowledgementReturnResponse,
     StageExecutionSummary,
     StandaloneStageResponse,
     TrainingPipelineResponse,
@@ -98,6 +99,7 @@ __all__ = [
     "StageExecutionSummary",
     "StandaloneStageResponse",
     "TrainingPipelineResponse",
+    "MasterPipelineRequestAcknowledgementReturnResponse",
     "InferenceWorkflowResponse",
     "WorkflowErrorResponse",
 ]
