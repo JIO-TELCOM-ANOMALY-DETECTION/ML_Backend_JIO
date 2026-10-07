@@ -113,8 +113,4 @@ Invoke-RestMethod http://127.0.0.1:8000/health
 
 No Docker/Compose files were found. Local registry/locking and in-process execution do not establish a verified distributed or multi-worker deployment contract.
 
-## Detailed documentation and Information Needed / Assumptions
-
-See [docs/](docs/) and [Master Pipeline Request Acknowledgement Return](docs/current_task/Master%20Pipeline%20Request%20Acknowledgement%20Return.md). `documentation.zip` is locally untracked; its intended publication has not been established.
-
-Confirm the supported Python range, intended Optuna pin, authoritative integration/system-test entry points and fixtures, and the benchmark evidence supporting the historic F1 claim before a reproducible submission.
+## Detailed documentation present in documentation.zip
